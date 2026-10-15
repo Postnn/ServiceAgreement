@@ -1,0 +1,7 @@
+/config.json
+/stage/
+/dist/
+*.exe
+*.syso
+*.zip
+*.log
