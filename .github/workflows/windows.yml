@@ -1,0 +1,55 @@
+name: Windows build and tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - name: Resolve Go dependencies
+        run: go mod tidy
+      - name: Unit tests
+        run: go test -count=1 -v ./...
+      - name: Static checks
+        run: go vet ./...
+      - name: Embed Win32 manifest
+        run: go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -manifest app.manifest -o cmd/serviceagreement/rsrc_windows_amd64.syso
+      - name: Prepare output directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Path stage -Force | Out-Null
+      - name: Build standalone GUI executable
+        run: go build -trimpath -ldflags="-s -w -H=windowsgui" -o stage/ServiceAgreement.exe ./cmd/serviceagreement
+      - name: Create distribution ZIP
+        shell: pwsh
+        run: |
+          Copy-Item config.example.json stage/config.example.json
+          Copy-Item config.example.json stage/config.json
+          Copy-Item README.md stage/README.txt
+          Compress-Archive -Path stage/* -DestinationPath ServiceAgreement-windows-amd64.zip -Force
+      - name: Upload ZIP as Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ServiceAgreement-windows-amd64
+          path: ServiceAgreement-windows-amd64.zip
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish build on GitHub Releases
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "build-${{ github.run_number }}"
+          gh release create $tag ServiceAgreement-windows-amd64.zip --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "ServiceAgreement $tag" --notes "Windows x64 standalone build; tests and static checks passed. Configure config.json before running." --prerelease
