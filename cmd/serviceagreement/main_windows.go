@@ -106,7 +106,7 @@ func run() error {
 	err = MainWindow{
 		AssignTo: &app.win,
 		Title:    "Договоры оказания услуг",
-		MinSize:  Size{820, 480}, Size: Size{1300, 630},
+		MinSize:  Size{Width: 820, Height: 480}, Size: Size{Width: 1300, Height: 630},
 		Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}, Spacing: 8},
 		Children: []Widget{
 			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
@@ -475,7 +475,7 @@ func (a *application) edit(original core.Record, existing bool) bool {
 	}
 	err = Dialog{
 		AssignTo: &dlg, Title: title,
-		MinSize: Size{800, 680}, Size: Size{1040, 790},
+		MinSize: Size{Width: 800, Height: 680}, Size: Size{Width: 1040, Height: 790},
 		Layout: VBox{Margins: Margins{Left: 16, Top: 12, Right: 16, Bottom: 12}, Spacing: 7},
 		Children: []Widget{
 			Composite{Layout: HBox{Spacing: 7}, Children: []Widget{
