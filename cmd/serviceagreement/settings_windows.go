@@ -151,7 +151,7 @@ func (a *application) openSettings() {
 			a.status.SetText("Ошибка подключения — откройте настройки")
 			walk.MsgBox(dlg, "Конфигурация сохранена", "config.json сохранён, но подключиться не удалось:\n"+err.Error(), walk.MsgBoxIconWarning)
 		} else {
-			a.refresh()
+			a.refreshBoth()
 		}
 		dlg.Accept()
 	}
