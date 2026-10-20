@@ -156,6 +156,10 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 		preview("Оплата", payDirection, payMonths, payDD, payHint)
 		preview("Отключение", offDirection, offMonths, offDD, offHint)
 	}
+	displayedAmount, amountFormatOK := core.MoneyDisplayN2(original.Amount)
+    if !amountFormatOK {
+        displayedAmount = original.Amount
+    }
 	updateAmountDisplay := func() {
         if amount == nil || amountHint == nil { return }
         if exact, err := core.MoneyValueFromEditor(amount.Text(), displayedAmount, original.Amount); err == nil {
@@ -166,11 +170,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
             amountHint.SetText("Введите сумму в формате N2, например 1 234,56")
         }
     }
-	displayedAmount, amountFormatOK := core.MoneyDisplayN2(original.Amount)
-    if !amountFormatOK {
-        displayedAmount = original.Amount
-    }
-    var saved bool
+	var saved bool
 	onSave := func() {
 		readInt := func(label string, e *walk.LineEdit) (int, error) { return core.ParseIntField(label, e.Text()) }
 		d, err := readInt("День начала периода", day)
