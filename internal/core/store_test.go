@@ -42,6 +42,18 @@ func (c *fakeSQLConn) QueryContext(_ context.Context, query string, args []drive
 			names: []string{"ContractID", "CustomColumn", "ServicePeriod", "AutoPay", "PaymentCode", "PaymentText", "SortByHidden"},
 			rows:  [][]driver.Value{{int64(13068), []byte("Номер контракта"), int64(3), int64(1), int64(306), []byte("Оплата: до 6 мая"), int64(12)}},
 		}, nil
+	case "query_unconfigured":
+		return &fakeSQLRows{
+			names: []string{"ContractID", "ContractName", "DateSigned", "CustomExtra"},
+			rows: [][]driver.Value{
+				{int64(1206), "Договор №1206", "2026-03-07", []byte("Поставщик")},
+				{int64(1307), "Договор №1307", "2026-04-11", []byte("Клиент")},
+			},
+		}, nil
+	case "query_unconfigured_empty":
+		return &fakeSQLRows{names: []string{"ContractID", "ContractName", "SomethingElse"}}, nil
+	case "query_unconfigured_bad":
+		return &fakeSQLRows{names: []string{"SomeOtherID", "ContractName"}}, nil
 	case "get_record":
 		return &fakeSQLRows{names: []string{"id", "type", "period", "auto", "amount", "day", "month", "docs", "pay", "off", "notify"},
 			rows: [][]driver.Value{{int64(13068), int64(23), int64(3), int64(1), "300.0000", int64(7), int64(1), int64(-6), int64(306), int64(320), int64(0)}}}, nil
@@ -159,5 +171,49 @@ func TestListColumnsMustExist(t *testing.T) {
 	cfg.ListColumns[1].SortField = "ContractID"
 	if _, err := ValidateResultColumns([]string{"ContractID", "CustomColumn"}, cfg.ListColumns); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUnconfiguredContractsUseConfiguredSQLAndDisplayEveryColumn(t *testing.T) {
+	state := &fakeSQLState{Affected: 1}
+	const driverName = "serviceAgreementUnconfiguredTest"
+	sql.Register(driverName, fakeSQLDriver{state: state})
+	db, err := sql.Open(driverName, "")
+	if err != nil { t.Fatal(err) }
+	defer db.Close()
+	cfg := DefaultConfig()
+	cfg.ConnectionString = "test"
+	cfg.WithoutParametersSQL = "query_unconfigured"
+	store := Store{DB: db, Config: cfg}
+	result, err := store.ListUnconfigured(context.Background(), "  1206 ")
+	if err != nil { t.Fatal(err) }
+	if state.Query != "query_unconfigured" || state.Args["search"] != "1206" ||
+		state.Args["limit"] != int64(cfg.ListLimit) && state.Args["limit"] != cfg.ListLimit {
+		t.Fatalf("wrong configured SQL or named search parameters: %s, %v", state.Query, state.Args)
+	}
+	if len(result.Columns) != 4 || len(result.Items) != 2 || result.Items[0].ID != 1206 ||
+		result.Items[0].Field("CustomExtra") != "Поставщик" {
+		t.Fatalf("SQL columns not exposed: %+v", result)
+	}
+	cols := UnconfiguredColumns(result.Columns)
+	if len(cols) != len(result.Columns) {
+		t.Fatalf("expected every SQL result column, got %v", cols)
+	}
+	for i, c := range cols {
+		if !c.Visible || c.Field != result.Columns[i] || c.Order != i+1 ||
+			c.Title != c.Field {
+			t.Errorf("new column %d must be visible as returned by SQL: %+v", i, c)
+		}
+	}
+	cfg.WithoutParametersSQL = "query_unconfigured_empty"
+	store.Config = cfg
+	empty, err := store.ListUnconfigured(context.Background(), "")
+	if err != nil || len(empty.Items) != 0 || len(empty.Columns) != 3 {
+		t.Fatalf("empty SQL result must still define columns: %+v %v", empty, err)
+	}
+	cfg.WithoutParametersSQL = "query_unconfigured_bad"
+	store.Config = cfg
+	if _, err := store.ListUnconfigured(context.Background(), ""); err == nil {
+		t.Fatal("missing ContractID must be rejected before displaying records")
 	}
 }
