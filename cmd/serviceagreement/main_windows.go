@@ -75,24 +75,37 @@ func run() error {
 		cfg = core.DefaultConfig()
 	}
 	app := &application{cfgPath: path, store: core.Store{Config: cfg}, model: &tableModel{columns: core.VisibleColumns(cfg.ListColumns)}, withoutModel: &tableModel{columns: core.UnconfiguredColumns([]string{"ContractID"})}}
+	gearIcon, err := makeSettingsGearBitmap()
+	if err != nil {
+		return fmt.Errorf("значок настроек: %w", err)
+	}
+	defer gearIcon.Dispose()
 	err = MainWindow{
 		AssignTo: &app.win, Title: "Договоры оказания услуг — ServiceAgreement",
 		MinSize: Size{Width: 850, Height: 490}, Size: Size{Width: 1370, Height: 680},
-		Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}, Spacing: 8},
+		Layout: VBox{Margins: Margins{Left: 12, Top: 4, Right: 12, Bottom: 12}, Spacing: 3},
 		Children: []Widget{
-			// Main-window settings are always accessible at the upper-right,
-			// independent of the currently selected agreements tab.
-			Composite{Layout: HBox{MarginsZero: true, SpacingZero: true}, Children: []Widget{
-				HSpacer{},
-				PushButton{
-					Name: "settingsGear", Text: "⚙",
-					ToolTipText: "Настройки SQL и колонок",
-					Font: Font{Family: "Segoe UI Symbol", PointSize: 16},
-					MinSize: Size{Width: 36, Height: 34},
-					MaxSize: Size{Width: 36, Height: 34},
-					OnClicked: app.openSettings,
+			// Small borderless icon rather than a native PushButton. The
+			// 20-pixel header leaves the tab strip directly below the icon.
+			Composite{
+				MinSize: Size{Height: 20}, MaxSize: Size{Height: 20},
+				Layout: HBox{MarginsZero: true, SpacingZero: true},
+				Children: []Widget{
+					HSpacer{},
+					ImageView{
+						Name: "settingsGear", Image: gearIcon,
+						Mode: ImageViewModeIdeal,
+						MinSize: Size{Width: 20, Height: 20},
+						MaxSize: Size{Width: 20, Height: 20},
+						ToolTipText: "Настройки SQL и колонок",
+						OnMouseUp: func(x, y int, button walk.MouseButton) {
+							if button == walk.LeftButton {
+								app.openSettings()
+							}
+						},
+					},
 				},
-			}},
+			},
 			TabWidget{Pages: []TabPage{
 				{
 					Title: "Договоры с параметрами",
@@ -152,7 +165,7 @@ func run() error {
 	app.table.ColumnClicked().Attach(app.sortByColumn)
 	app.withoutTable.ColumnClicked().Attach(app.sortWithoutByColumn)
 	if loadErr != nil {
-		app.status.SetText("Требуется настройка config.json — нажмите «Настройки SQL и колонок»")
+		app.status.SetText("Требуется настройка config.json — нажмите значок ⚙ справа вверху")
 	} else if err := app.connect(cfg); err != nil {
 		app.status.SetText("Нет подключения к SQL Server — проверьте настройки")
 	} else {
