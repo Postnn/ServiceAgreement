@@ -54,7 +54,7 @@ func (a *application) openSettings() {
 
 	commitCurrentSQL := func() {
 		if sqlEdit != nil && selectedSQL >= 0 && selectedSQL < len(core.SQLFields) {
-			*cfg.SQLAt(selectedSQL) = sqlEdit.Text()
+			*cfg.SQLAt(selectedSQL) = sqlTextFromEditor(sqlEdit.Text())
 		}
 	}
 	onSQLChanged := func() {
@@ -67,11 +67,11 @@ func (a *application) openSettings() {
 		}
 		commitCurrentSQL()
 		selectedSQL = next
-		_ = sqlEdit.SetText(core.FormatSQL(*cfg.SQLAt(selectedSQL)))
+		_ = sqlEdit.SetText(sqlTextForEditor(core.FormatSQL(*cfg.SQLAt(selectedSQL))))
 	}
 	formatCurrentSQL := func() {
 		if sqlEdit != nil {
-			_ = sqlEdit.SetText(core.FormatSQL(sqlEdit.Text()))
+			_ = sqlEdit.SetText(sqlTextForEditor(core.FormatSQL(sqlTextFromEditor(sqlEdit.Text()))))
 		}
 	}
 	collect := func() error {
@@ -170,7 +170,7 @@ func (a *application) openSettings() {
 				ComboBox{AssignTo: &sqlPicker, Model: sqlNames, CurrentIndex: 0, OnCurrentIndexChanged: onSQLChanged},
 				PushButton{Text: "Форматировать SQL", OnClicked: formatCurrentSQL},
 			}},
-			TextEdit{AssignTo: &sqlEdit, Text: core.FormatSQL(cfg.ListSQL), VScroll: true, HScroll: true,
+			TextEdit{AssignTo: &sqlEdit, Text: sqlTextForEditor(core.FormatSQL(cfg.ListSQL)), VScroll: true, HScroll: true,
 				Font: Font{Family: "Consolas", PointSize: 10}},
 			Label{Text: "SQL-параметры @search, @limit, @selected, @id и параметры записи описаны в README. Порядок SELECT для одной записи важен."},
 			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
