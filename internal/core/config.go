@@ -78,6 +78,7 @@ type Config struct {
 	LookupLimit      int          `json:"lookup_limit"`
 	ListSQL          string       `json:"list_sql"`
 	SearchSQL        string       `json:"search_sql"`
+	WithoutParametersSQL string `json:"without_parameters_sql"`
 	ListColumns      []ListColumn `json:"list_columns"`
 	ContractsSQL     string       `json:"contracts_sql"`
 	DocumentTypesSQL string       `json:"document_types_sql"`
@@ -128,6 +129,24 @@ const listProjection = `SELECT TOP (@limit)
          ELSE CONVERT(nvarchar(2), ABS(CONVERT(bigint, t.[ДеньМесяцаОтключенияУслуги])) % 100) + N'-е число' END AS DisconnectText
 FROM dbo.[ДокументыДоговораОказанияУслуг] AS t`
 
+// Default candidate list. Adapt dbo.ДокументыДанные to the actual
+// service-agreement type and name schema in the SQL settings. ContractID is
+// required, every other SELECT field is displayed by the application.
+const defaultWithoutParametersSQL = `SELECT TOP (@limit)
+    d.[КодДокумента] AS ContractID,
+    CONVERT(nvarchar(30), d.[КодДокумента]) AS ContractName
+FROM dbo.[ДокументыДанные] AS d
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM dbo.[ДокументыДоговораОказанияУслуг] AS p
+    WHERE p.[КодДокументаДоговораОказанияУслуг] = d.[КодДокумента]
+)
+AND (
+    @search = N'' OR
+    CONVERT(nvarchar(30), d.[КодДокумента]) LIKE N'%' + @search + N'%'
+)
+ORDER BY d.[КодДокумента] DESC`
+
 const defaultGetSQL = `SELECT
  [КодДокументаДоговораОказанияУслуг], [КодТипаДокументаОснованияАвтооплаты],
  [ПериодОказанияУслуги], [Автооплата],
@@ -174,6 +193,7 @@ func DefaultConfig() Config {
 	return Config{
 		ConnectionString: "",
 		ListLimit:        200, LookupLimit: 100,
+		WithoutParametersSQL: defaultWithoutParametersSQL,
 		ListSQL: listProjection + `
 ORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC`,
 		SearchSQL: listProjection + `
@@ -218,6 +238,7 @@ ORDER BY t.[КодТипаДокумента]`,
 var SQLFields = []struct{ Key, Caption string }{
 	{"list_sql", "Список договоров (без фильтра)"},
 	{"search_sql", "Поиск по списку договоров"},
+	{"without_parameters_sql", "Договоры без параметров (с поиском)"},
 	{"contracts_sql", "Поиск и выбор договора"},
 	{"document_types_sql", "Поиск типа документа основания автооплаты"},
 	{"get_sql", "Чтение одной записи"},
@@ -233,16 +254,18 @@ func (c *Config) SQLAt(i int) *string {
 	case 1:
 		return &c.SearchSQL
 	case 2:
-		return &c.ContractsSQL
+		return &c.WithoutParametersSQL
 	case 3:
-		return &c.DocumentTypesSQL
+		return &c.ContractsSQL
 	case 4:
-		return &c.GetSQL
+		return &c.DocumentTypesSQL
 	case 5:
-		return &c.InsertSQL
+		return &c.GetSQL
 	case 6:
-		return &c.UpdateSQL
+		return &c.InsertSQL
 	case 7:
+		return &c.UpdateSQL
+	case 8:
 		return &c.DeleteSQL
 	}
 	return nil
