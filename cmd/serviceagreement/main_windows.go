@@ -33,20 +33,22 @@ func (m *tableModel) replace(rows []core.ListItem) { m.items = rows; m.PublishRo
 
 func tableColumns(c []core.ListColumn) []TableViewColumn {
 	result := make([]TableViewColumn, 0, len(c))
-	for _, col := range c {
-		result = append(result, TableViewColumn{Title: col.Title, Width: col.Width})
+	for _, col := range core.VisibleColumns(c) {
+		result = append(result, TableViewColumn{Name: col.Field, Title: col.Title, Width: col.Width})
 	}
 	return result
 }
 
 type application struct {
-	cfgPath string
-	store   core.Store
-	win     *walk.MainWindow
-	table   *walk.TableView
-	search  *walk.LineEdit
-	status  *walk.Label
-	model   *tableModel
+	cfgPath        string
+	store          core.Store
+	win            *walk.MainWindow
+	table          *walk.TableView
+	search         *walk.LineEdit
+	status         *walk.Label
+	model          *tableModel
+	sortField      string
+	sortDescending bool
 }
 
 func main() {
@@ -62,10 +64,11 @@ func run() error {
 	}
 	path := filepath.Join(filepath.Dir(exe), "config.json")
 	cfg, loadErr := core.LoadConfig(path)
+	app.table.ColumnClicked().Attach(app.sortByColumn)
 	if loadErr != nil {
 		cfg = core.DefaultConfig()
 	}
-	app := &application{cfgPath: path, store: core.Store{Config: cfg}, model: &tableModel{columns: cfg.ListColumns}}
+	app := &application{cfgPath: path, store: core.Store{Config: cfg}, model: &tableModel{columns: core.VisibleColumns(cfg.ListColumns)}}
 	err = MainWindow{
 		AssignTo: &app.win, Title: "Договоры оказания услуг — ServiceAgreement",
 		MinSize: Size{Width: 850, Height: 490}, Size: Size{Width: 1370, Height: 680},
@@ -82,10 +85,10 @@ func run() error {
 				PushButton{Text: "Обновить", OnClicked: app.refresh},
 			}},
 			TableView{AssignTo: &app.table, Model: app.model, AlternatingRowBG: true,
-				MultiSelection: false, NotSortableByHeaderClick: true,
-				Columns: tableColumns(cfg.ListColumns), OnItemActivated: app.editSelected,
+				MultiSelection: false,
+				Columns:        tableColumns(cfg.ListColumns), OnItemActivated: app.editSelected,
 			},
-			Label{Text: "Даты XDD в списке — примеры для цикла текущего года, а не фактические даты оплаты или отключения договора."},
+			Label{Text: "Все значения списка берутся из SQL. Щёлкните заголовок колонки для сортировки по её sortField."},
 			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 				PushButton{Text: "Добавить", OnClicked: app.add},
 				PushButton{Text: "Изменить", OnClicked: app.editSelected},
@@ -138,9 +141,11 @@ func (a *application) applyColumns(cols []core.ListColumn) error {
 	if err := a.table.Columns().Clear(); err != nil {
 		return err
 	}
-	a.model.columns = cols
-	for _, col := range cols {
+	a.model.columns = core.VisibleColumns(cols)
+	a.sortField, a.sortDescending = "", false
+	for _, col := range a.model.columns {
 		c := walk.NewTableViewColumn()
+		c.SetName(col.Field)
 		_ = c.SetTitle(col.Title)
 		_ = c.SetWidth(col.Width)
 		if err := a.table.Columns().Add(c); err != nil {
@@ -149,6 +154,25 @@ func (a *application) applyColumns(cols []core.ListColumn) error {
 	}
 	a.model.replace(nil)
 	return nil
+}
+
+func (a *application) sortByColumn(index int) {
+	if index < 0 || index >= len(a.model.columns) {
+		return
+	}
+	field := a.model.columns[index].SortField
+	if a.sortField == field {
+		a.sortDescending = !a.sortDescending
+	} else {
+		a.sortField, a.sortDescending = field, false
+	}
+	core.SortListItems(a.model.items, a.sortField, a.sortDescending)
+	a.model.PublishRowsReset()
+	arrow := "↑"
+	if a.sortDescending {
+		arrow = "↓"
+	}
+	a.status.SetText(fmt.Sprintf("Записей: %d; сортировка: %s %s", len(a.model.items), field, arrow))
 }
 
 func (a *application) warn(title string, err error) {
@@ -166,6 +190,7 @@ func (a *application) refresh() {
 		a.warn("Ошибка чтения списка", err)
 		return
 	}
+	core.SortListItems(rows, a.sortField, a.sortDescending)
 	a.model.replace(rows)
 	a.status.SetText(fmt.Sprintf("Записей: %d", len(rows)))
 }

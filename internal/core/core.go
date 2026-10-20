@@ -17,6 +17,7 @@ import (
 type ListItem struct {
 	ID     int
 	Values map[string]string
+	Raw    map[string]any // original SQL types, used only for click-to-sort
 }
 
 type Option struct {
@@ -81,17 +82,17 @@ func (r *Record) Validate() error {
 	if r.TypeID <= 0 {
 		return errors.New("выберите тип документа автооплаты")
 	}
-	if r.Period != 1 && r.Period != 3 && r.Period != 12 {
-		return errors.New("период оказания услуги: только 1, 3 или 12 месяцев")
+	if r.Period < 1 || r.Period > 255 {
+		return errors.New("период оказания услуги: укажите от 1 до 255 месяцев (SQL tinyint)")
 	}
 	if r.AutoPay < 0 || r.AutoPay > 1 || r.Notify < 0 || r.Notify > 1 {
 		return errors.New("автооплата и оповещение куратора должны быть 0 или 1")
 	}
 	if r.StartDay < 1 || r.StartDay > 31 {
-		return errors.New("день начала цикла должен быть 1..31")
+		return errors.New("день начала периода должен быть 1..31")
 	}
 	if r.StartMonth < 1 || r.StartMonth > 12 {
-		return errors.New("месяц начала цикла должен быть 1..12")
+		return errors.New("месяц начала периода должен быть 1..12")
 	}
 	for _, code := range []struct {
 		v int

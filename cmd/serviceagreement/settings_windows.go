@@ -154,25 +154,34 @@ func (m *columnModel) Value(row, col int) interface{} {
 	x := m.columns[row]
 	switch col {
 	case 0:
-		return x.Field
+		return x.Order
 	case 1:
-		return x.Title
+		return x.Field
 	case 2:
+		return x.Title
+	case 3:
 		return x.Width
+	case 4:
+		return x.SortField
+	case 5:
+		if x.Visible {
+			return "Да"
+		}
+		return "Нет"
 	}
 	return ""
 }
 func (m *columnModel) reset() { m.PublishRowsReset() }
 
 func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
-	columns := append([]core.ListColumn(nil), cfg.ListColumns...)
-	model := &columnModel{columns: columns}
+	model := &columnModel{columns: core.OrderedColumns(cfg.ListColumns)}
 	var dlg *walk.Dialog
 	var table *walk.TableView
-	var field, title, width *walk.LineEdit
-	var current = -1
+	var field, title, width, order, sortField *walk.LineEdit
+	var visible *walk.CheckBox
+	current := -1
 	loadRow := func() {
-		if table == nil || field == nil || title == nil || width == nil {
+		if table == nil || field == nil || title == nil || width == nil || order == nil || sortField == nil || visible == nil {
 			return
 		}
 		current = table.CurrentIndex()
@@ -181,10 +190,16 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 			_ = field.SetText(x.Field)
 			_ = title.SetText(x.Title)
 			_ = width.SetText(strconv.Itoa(x.Width))
+			_ = order.SetText(strconv.Itoa(x.Order))
+			_ = sortField.SetText(x.SortField)
+			_ = visible.SetChecked(x.Visible)
 		} else {
 			_ = field.SetText("")
 			_ = title.SetText("")
 			_ = width.SetText("")
+			_ = order.SetText("")
+			_ = sortField.SetText("")
+			_ = visible.SetChecked(false)
 		}
 	}
 	applyRow := func() bool {
@@ -196,35 +211,57 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 			settingsError(dlg, "Колонки", err)
 			return false
 		}
-		x := core.ListColumn{Field: strings.TrimSpace(field.Text()), Title: strings.TrimSpace(title.Text()), Width: w}
+		o, err := core.ParseIntField("Порядок колонки", order.Text())
+		if err != nil {
+			settingsError(dlg, "Колонки", err)
+			return false
+		}
+		x := core.ListColumn{
+			Field: strings.TrimSpace(field.Text()), Title: strings.TrimSpace(title.Text()),
+			Width: w, Order: o, SortField: strings.TrimSpace(sortField.Text()), Visible: visible.Checked(),
+		}
 		tmp := append([]core.ListColumn(nil), model.columns...)
 		tmp[current] = x
 		if err := core.ValidateColumns(tmp); err != nil {
 			settingsError(dlg, "Колонки", err)
 			return false
 		}
-		model.columns[current] = x
+		model.columns = core.OrderedColumns(tmp)
 		model.reset()
-		_ = table.SetCurrentIndex(current)
+		for i, v := range model.columns {
+			if v.Order == x.Order {
+				_ = table.SetCurrentIndex(i)
+				break
+			}
+		}
 		return true
 	}
 	onAdd := func() {
 		if !applyRow() {
 			return
 		}
-		fieldName := fmt.Sprintf("NewField%d", len(model.columns)+1)
-		model.columns = append(model.columns, core.ListColumn{Field: fieldName, Title: "Новая колонка", Width: 140})
+		maxOrder := 0
+		for _, c := range model.columns {
+			if c.Order > maxOrder {
+				maxOrder = c.Order
+			}
+		}
+		fieldName := fmt.Sprintf("NewField%d", maxOrder+1)
+		model.columns = append(model.columns, core.ListColumn{
+			Field: fieldName, Title: "Новая колонка", Width: 140,
+			Order: maxOrder + 1, SortField: fieldName, Visible: true,
+		})
 		model.reset()
 		_ = table.SetCurrentIndex(len(model.columns) - 1)
 		loadRow()
 	}
 	onRemove := func() {
-		if len(model.columns) <= 1 {
-			walk.MsgBox(dlg, "Колонки", "Нужна хотя бы одна колонка.", walk.MsgBoxIconInformation)
-			return
-		}
 		i := table.CurrentIndex()
 		if i < 0 || i >= len(model.columns) {
+			return
+		}
+		if len(model.columns) <= 1 {
+			walk.MsgBox(dlg, "Колонки", "Нужна хотя бы одна колонка.", walk.MsgBoxIconInformation)
 			return
 		}
 		model.columns = append(model.columns[:i], model.columns[i+1:]...)
@@ -244,7 +281,8 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 		if i < 0 || j < 0 || j >= len(model.columns) {
 			return
 		}
-		model.columns[i], model.columns[j] = model.columns[j], model.columns[i]
+		model.columns[i].Order, model.columns[j].Order = model.columns[j].Order, model.columns[i].Order
+		model.columns = core.OrderedColumns(model.columns)
 		model.reset()
 		_ = table.SetCurrentIndex(j)
 		loadRow()
@@ -257,23 +295,30 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 			settingsError(dlg, "Колонки", err)
 			return
 		}
-		cfg.ListColumns = append([]core.ListColumn(nil), model.columns...)
+		cfg.ListColumns = core.OrderedColumns(model.columns)
 		dlg.Accept()
 	}
 	err := Dialog{
-		AssignTo: &dlg, Title: "Колонки списка — порядок и заголовки",
-		MinSize: Size{Width: 710, Height: 430}, Size: Size{Width: 820, Height: 540},
+		AssignTo: &dlg, Title: "Колонки списка — порядок, сортировка и видимость",
+		MinSize: Size{Width: 870, Height: 540}, Size: Size{Width: 1090, Height: 660},
 		Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}, Spacing: 8},
 		Children: []Widget{
-			Label{Text: "Поле — имя столбца SELECT или вычисляемое поле; порядок строк задаёт порядок колонок."},
+			Label{Text: "field и sortField — только алиасы результата list_sql и search_sql. Вычисляемые значения формируйте в SQL."},
 			TableView{AssignTo: &table, Model: model, NotSortableByHeaderClick: true, AlternatingRowBG: true,
-				Columns:               []TableViewColumn{{Title: "Поле SQL", Width: 180}, {Title: "Заголовок", Width: 420}, {Title: "Ширина", Width: 85}},
+				Columns: []TableViewColumn{
+					{Title: "Порядок", Width: 80}, {Title: "Поле SQL", Width: 180},
+					{Title: "Заголовок", Width: 310}, {Title: "Ширина", Width: 75},
+					{Title: "sortField", Width: 170}, {Title: "Видна", Width: 75},
+				},
 				OnCurrentIndexChanged: loadRow,
 			},
 			Composite{Layout: Grid{Columns: 2, Spacing: 6}, Children: []Widget{
-				Label{Text: "Имя поля (Alias):"}, LineEdit{AssignTo: &field},
-				Label{Text: "Заголовок:"}, LineEdit{AssignTo: &title},
-				Label{Text: "Ширина (45–1600):"}, LineEdit{AssignTo: &width},
+				Label{Text: "Имя поля SELECT (field):"}, LineEdit{AssignTo: &field},
+				Label{Text: "Заголовок (title):"}, LineEdit{AssignTo: &title},
+				Label{Text: "Ширина (width, 45–1600):"}, LineEdit{AssignTo: &width},
+				Label{Text: "Порядок (order, от 1):"}, LineEdit{AssignTo: &order},
+				Label{Text: "Поле сортировки (sortField):"}, LineEdit{AssignTo: &sortField},
+				Label{Text: "Видимость (visible):"}, CheckBox{AssignTo: &visible, Text: "Отображать колонку"},
 			}},
 			Composite{Layout: HBox{Spacing: 7}, Children: []Widget{
 				PushButton{Text: "Применить к строке", OnClicked: func() { applyRow() }},

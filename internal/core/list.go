@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// sqlText formats the value returned by SQL Server; it never derives extra fields.
 func sqlText(v any) string {
 	switch x := v.(type) {
 	case nil:
@@ -34,6 +35,45 @@ func (r ListItem) Field(name string) string {
 	return ""
 }
 
+// SQLValue returns the unformatted SQL value for type-aware sorting.
+func (r ListItem) SQLValue(name string) any {
+	for k, v := range r.Raw {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return r.Field(name)
+}
+
+// ValidateResultColumns rejects missing and duplicate SQL aliases even for an empty list.
+// No virtual columns are computed by Go. field and sortField must come from SQL.
+func ValidateResultColumns(names []string, columns []ListColumn) (int, error) {
+	known := make(map[string]bool, len(names))
+	idColumn := -1
+	for i, name := range names {
+		k := strings.ToLower(strings.TrimSpace(name))
+		if k == "" || known[k] {
+			return -1, fmt.Errorf("дублирующийся или пустой SQL-алиас %q", name)
+		}
+		known[k] = true
+		if k == "contractid" {
+			idColumn = i
+		}
+	}
+	if idColumn < 0 {
+		return -1, fmt.Errorf("SQL списка должен возвращать ContractID (даже если колонка скрыта)")
+	}
+	for _, col := range columns {
+		if !known[strings.ToLower(strings.TrimSpace(col.Field))] {
+			return -1, fmt.Errorf("поле %q из list_columns отсутствует в SQL результате; добавьте его в list_sql и search_sql либо уберите из list_columns", col.Field)
+		}
+		if !known[strings.ToLower(strings.TrimSpace(col.SortField))] {
+			return -1, fmt.Errorf("поле сортировки %q для колонки %q отсутствует в SQL результате", col.SortField, col.Field)
+		}
+	}
+	return idColumn, nil
+}
+
 func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
 	search = strings.TrimSpace(search)
 	query := s.Config.ListSQL
@@ -49,30 +89,11 @@ func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	idColumn := -1
-	known := make(map[string]bool, len(names)+4)
-	for i, name := range names {
-		k := strings.ToLower(name)
-		if known[k] {
-			return nil, fmt.Errorf("дублирующийся псевдоним столбца: %s", name)
-		}
-		known[k] = true
-		if strings.EqualFold(name, "ContractID") {
-			idColumn = i
-		}
+	idColumn, err := ValidateResultColumns(names, s.Config.ListColumns)
+	if err != nil {
+		return nil, err
 	}
-	if idColumn < 0 {
-		return nil, fmt.Errorf("SQL списка должен возвращать колонку ContractID")
-	}
-	virtual := []string{"ServicePeriodText", "AutoPayText", "DocumentsText", "PaymentText", "DisconnectText"}
-	for _, name := range virtual {
-		known[strings.ToLower(name)] = true
-	}
-	for _, col := range s.Config.ListColumns {
-		if !known[strings.ToLower(col.Field)] {
-			return nil, fmt.Errorf("поле %q из list_columns отсутствует в SQL результате", col.Field)
-		}
-	}
+
 	result := make([]ListItem, 0)
 	for rows.Next() {
 		values := make([]any, len(names))
@@ -88,50 +109,17 @@ func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
 		if err != nil || id <= 0 {
 			return nil, fmt.Errorf("неверный ContractID %q", idText)
 		}
-		item := ListItem{ID: id, Values: make(map[string]string, len(names)+len(virtual))}
+		item := ListItem{ID: id, Values: make(map[string]string, len(names)), Raw: make(map[string]any, len(names))}
 		for i, name := range names {
 			item.Values[name] = sqlText(values[i])
+			// The data stays fully SQL-sourced; []byte is copied because sql.Rows may reuse it.
+			if raw, ok := values[i].([]byte); ok {
+				item.Raw[name] = append([]byte(nil), raw...)
+			} else {
+				item.Raw[name] = values[i]
+			}
 		}
-		deriveListFields(&item)
 		result = append(result, item)
 	}
 	return result, rows.Err()
-}
-
-func deriveListFields(r *ListItem) {
-	switch r.Field("ServicePeriod") {
-	case "1":
-		r.Values["ServicePeriodText"] = "Ежемесячно"
-	case "3":
-		r.Values["ServicePeriodText"] = "Ежеквартально"
-	case "12":
-		r.Values["ServicePeriodText"] = "Ежегодно"
-	default:
-		r.Values["ServicePeriodText"] = r.Field("ServicePeriod")
-	}
-	switch r.Field("AutoPay") {
-	case "1":
-		r.Values["AutoPayText"] = "Да"
-	case "0":
-		r.Values["AutoPayText"] = "Нет"
-	default:
-		r.Values["AutoPayText"] = r.Field("AutoPay")
-	}
-	startDay, _ := strconv.Atoi(r.Field("StartDay"))
-	startMonth, _ := strconv.Atoi(r.Field("StartMonth"))
-	for _, f := range []struct{ Raw, Virtual string }{
-		{"DocumentsCode", "DocumentsText"},
-		{"PaymentCode", "PaymentText"},
-		{"DisconnectCode", "DisconnectText"},
-	} {
-		if code, err := strconv.Atoi(r.Field(f.Raw)); err == nil {
-			description := ExplainXDD(code)
-			if startDay > 0 && startMonth > 0 {
-				description += "  →  " + ExampleDate(code, startDay, startMonth, time.Now().Year())
-			}
-			r.Values[f.Virtual] = description
-		} else {
-			r.Values[f.Virtual] = r.Field(f.Raw)
-		}
-	}
 }

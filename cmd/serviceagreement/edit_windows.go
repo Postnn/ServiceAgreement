@@ -76,12 +76,6 @@ func (a *application) edit(original core.Record, existing bool) bool {
 		query: func(q string, selected int) ([]core.Option, error) {
 			return lookup(a.store.Config.DocumentTypesSQL, q, selected)
 		}}
-	periodIndex := 0
-	if original.Period == 3 {
-		periodIndex = 1
-	} else if original.Period == 12 {
-		periodIndex = 2
-	}
 	monthNames := []string{"01 — январь", "02 — февраль", "03 — март", "04 — апрель", "05 — май", "06 — июнь", "07 — июль", "08 — август", "09 — сентябрь", "10 — октябрь", "11 — ноябрь", "12 — декабрь"}
 	directionNames := []string{"От начала (включительно)", "До начала"}
 	docInitial, docError := core.ParseXDD(original.DocumentsCode)
@@ -125,7 +119,7 @@ func (a *application) edit(original core.Record, existing bool) bool {
 			docMonths == nil || payMonths == nil || offMonths == nil || docDD == nil || payDD == nil || offDD == nil {
 			return
 		}
-		d, dayErr := core.ParseIntField("День начала цикла", day.Text())
+		d, dayErr := core.ParseIntField("День начала периода", day.Text())
 		mo := monthBox.CurrentIndex() + 1
 		year := time.Now().Year()
 		preview := func(label string, direction *walk.ComboBox, months *walk.LineEdit, dd *walk.ComboBox, target *walk.Label) {
@@ -136,7 +130,7 @@ func (a *application) edit(original core.Record, existing bool) bool {
 			}
 			c, _ := core.ParseXDD(code)
 			if dayErr != nil || d < 1 || d > 31 || mo < 1 || mo > 12 {
-				target.SetText(fmt.Sprintf("Код БД: %d — %s; для примера даты задайте начало цикла", code, c.Label()))
+				target.SetText(fmt.Sprintf("Код БД: %d — %s; для примера даты задайте начало периода", code, c.Label()))
 				return
 			}
 			date := core.ExampleDate(code, d, mo, year)
@@ -169,15 +163,14 @@ func (a *application) edit(original core.Record, existing bool) bool {
 			a.warn("Некорректное значение", err)
 			return
 		}
-		periodIndex := periodBox.CurrentIndex()
-		if periodIndex < 0 || periodIndex > 2 {
-			a.warn("Некорректное значение", errors.New("выберите период"))
+		period, err := core.ParseServicePeriod(periodBox.Text())
+		if err != nil {
+			a.warn("Некорректное значение", err)
 			return
 		}
-		periods := []int{1, 3, 12}
 		updated := core.Record{
 			ContractID: contractChoice.value(),
-			TypeID:     typeChoice.value(), Period: periods[periodIndex],
+			TypeID:     typeChoice.value(), Period: period,
 			Amount: strings.TrimSpace(amount.Text()), StartDay: d, StartMonth: monthBox.CurrentIndex() + 1,
 			DocumentsCode: docCode, PaymentCode: payCode, DisconnectCode: offCode,
 		}
@@ -246,20 +239,20 @@ func (a *application) edit(original core.Record, existing bool) bool {
 						}
 					},
 				},
-				Label{Text: "Период оказания услуги:"},
-				ComboBox{AssignTo: &periodBox, Model: []string{"Ежемесячно (1)", "Ежеквартально (3)", "Ежегодно (12)"}, CurrentIndex: periodIndex},
+				Label{Text: "Период оказания услуги (1–255 месяцев):"},
+				ComboBox{AssignTo: &periodBox, Editable: true, Model: core.ServicePeriodChoices, Value: core.ServicePeriodLabel(original.Period)},
 				Label{Text: "Автооплата:"},
 				CheckBox{AssignTo: &autoBox, Text: "Создавать служебку автоматически", Checked: original.AutoPay == 1},
 				Label{Text: "Сумма абонентской платы:"},
 				LineEdit{AssignTo: &amount, Text: original.Amount},
 				Label{Text: "День начала периода (1–31):"},
 				LineEdit{AssignTo: &day, Text: intText(original.StartDay), OnTextChanged: func() { updateExamples() }},
-				Label{Text: "Месяц начала цикла:"},
+				Label{Text: "Месяц начала периода:"},
 				ComboBox{AssignTo: &monthBox, Model: monthNames, CurrentIndex: original.StartMonth - 1, OnCurrentIndexChanged: func() { updateExamples() }},
 				Label{Text: "Оповещение куратора:"},
 				CheckBox{AssignTo: &notifyBox, Text: "Оповещать при отсутствии документов", Checked: original.Notify == 1},
 			}},
-			Label{Text: "Сроки относительно начала цикла. Укажите направление, число полных месяцев и день. DD=99 — последний день месяца."},
+			Label{Text: "Сроки относительно начала периода. Укажите направление, число полных месяцев и день. DD=99 — последний день месяца."},
 			Label{Text: "Получение документов:"},
 			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 				Label{Text: "Направление:"}, ComboBox{AssignTo: &docDirection, Model: directionNames, CurrentIndex: dirIndex(docInitial.Before), OnCurrentIndexChanged: func() { updateExamples() }},
@@ -281,7 +274,7 @@ func (a *application) edit(original core.Record, existing bool) bool {
 				Label{Text: "День:"}, ComboBox{AssignTo: &offDD, Model: dayLabels(), CurrentIndex: dayIndex(offInitial.Day), OnCurrentIndexChanged: func() { updateExamples() }},
 			}},
 			Label{AssignTo: &offHint, Text: ""},
-			Label{Text: "Даты приведены для примера с началом цикла в текущем году; в БД записывается только код XDD."},
+			Label{Text: "Даты приведены для примера с началом периода в текущем году; в БД записывается только код XDD."},
 			Composite{Layout: HBox{Spacing: 10}, Children: []Widget{
 				HSpacer{},
 				PushButton{AssignTo: &saveButton, Text: "Сохранить", OnClicked: onSave},

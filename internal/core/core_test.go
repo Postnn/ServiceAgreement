@@ -127,9 +127,17 @@ func TestRecordValidation(t *testing.T) {
 	if r.Amount != "123.4500" {
 		t.Fatalf("unexpected money %q", r.Amount)
 	}
-	r.Period = 2
-	if err := r.Validate(); err == nil {
-		t.Fatal("invalid period accepted")
+	for _, period := range []int{2, 4, 11, 13, 255} {
+		r.Period = period
+		if err := r.Validate(); err != nil {
+			t.Fatalf("valid period %d: %v", period, err)
+		}
+	}
+	for _, period := range []int{0, -1, 256} {
+		r.Period = period
+		if err := r.Validate(); err == nil {
+			t.Fatalf("invalid period %d accepted", period)
+		}
 	}
 }
 

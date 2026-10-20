@@ -7,15 +7,69 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
-// ListColumn refers to either an alias returned by list_sql/search_sql or to
-// one of the virtual aliases described in README.md. Order controls display.
+// ListColumn maps a displayed column to a field returned by both SQL list queries.
+// Order is one-based; SortField may reference another (even hidden) SQL field.
+// Visible=false hides the column, but SQL must still return every configured alias.
 type ListColumn struct {
-	Field string `json:"field"`
-	Title string `json:"title"`
-	Width int    `json:"width"`
+	Field     string `json:"field"`
+	Title     string `json:"title"`
+	Width     int    `json:"width"`
+	Order     int    `json:"order"`
+	SortField string `json:"sortField"`
+	Visible   bool   `json:"visible"`
+}
+
+// UnmarshalJSON upgrades pre-v4 column objects without losing the visible flag.
+// Missing order is normalized to the legacy array position by LoadConfig.
+func (c *ListColumn) UnmarshalJSON(data []byte) error {
+	type wireColumn struct {
+		Field     string  `json:"field"`
+		Title     string  `json:"title"`
+		Width     int     `json:"width"`
+		Order     *int    `json:"order"`
+		SortField *string `json:"sortField"`
+		Visible   *bool   `json:"visible"`
+	}
+	var w wireColumn
+	d := json.NewDecoder(strings.NewReader(string(data)))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&w); err != nil {
+		return err
+	}
+	*c = ListColumn{Field: w.Field, Title: w.Title, Width: w.Width,
+		Order: -1, SortField: w.Field, Visible: true}
+	if w.Order != nil {
+		c.Order = *w.Order
+	}
+	if w.SortField != nil {
+		c.SortField = *w.SortField
+	}
+	if w.Visible != nil {
+		c.Visible = *w.Visible
+	}
+	return nil
+}
+
+// OrderedColumns returns a copy sorted by the explicit order property.
+func OrderedColumns(cols []ListColumn) []ListColumn {
+	result := append([]ListColumn(nil), cols...)
+	sort.SliceStable(result, func(i, j int) bool { return result[i].Order < result[j].Order })
+	return result
+}
+
+// VisibleColumns returns the configured display subset, in explicit order.
+func VisibleColumns(cols []ListColumn) []ListColumn {
+	var visible []ListColumn
+	for _, c := range OrderedColumns(cols) {
+		if c.Visible {
+			visible = append(visible, c)
+		}
+	}
+	return visible
 }
 
 type Config struct {
@@ -37,13 +91,41 @@ const listProjection = `SELECT TOP (@limit)
     t.[КодДокументаДоговораОказанияУслуг] AS ContractID,
     CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) AS AgreementLabel,
     t.[ПериодОказанияУслуги] AS ServicePeriod,
+    CASE t.[ПериодОказанияУслуги]
+         WHEN 1 THEN N'Один месяц (1)'
+         WHEN 3 THEN N'Три месяца (3)'
+         WHEN 12 THEN N'Двенадцать месяцев (12)'
+         ELSE CONVERT(nvarchar(3), t.[ПериодОказанияУслуги]) + N' ' +
+              CASE WHEN t.[ПериодОказанияУслуги] % 100 BETWEEN 11 AND 14 THEN N'месяцев'
+                   WHEN t.[ПериодОказанияУслуги] % 10 = 1 THEN N'месяц'
+                   WHEN t.[ПериодОказанияУслуги] % 10 BETWEEN 2 AND 4 THEN N'месяца'
+                   ELSE N'месяцев' END END AS ServicePeriodText,
     CONVERT(nvarchar(40), CONVERT(decimal(19,4), t.[СуммаАбонентскойПлаты])) AS Amount,
     t.[Автооплата] AS AutoPay,
+    CASE t.[Автооплата] WHEN 1 THEN N'Да' ELSE N'Нет' END AS AutoPayText,
     t.[ДеньМесяцаНачалаОказанияУслуги] AS StartDay,
     t.[МесяцНачалаОказанияУслуги] AS StartMonth,
     t.[ДеньМесяцаПолученияДокументов] AS DocumentsCode,
     t.[ДеньМесяцаОплатыПоДоговору] AS PaymentCode,
-    t.[ДеньМесяцаОтключенияУслуги] AS DisconnectCode
+    t.[ДеньМесяцаОтключенияУслуги] AS DisconnectCode,
+    CASE WHEN t.[ДеньМесяцаПолученияДокументов] < 0 THEN N'До начала периода' ELSE N'От начала периода' END + N': ' +
+    CASE WHEN ABS(CONVERT(bigint, t.[ДеньМесяцаПолученияДокументов])) / 100 = 0 THEN N'без смещения по месяцам, '
+         WHEN t.[ДеньМесяцаПолученияДокументов] < 0 THEN N'за ' + CONVERT(nvarchar(20), ABS(CONVERT(bigint, t.[ДеньМесяцаПолученияДокументов])) / 100) + N' мес., '
+         ELSE N'через ' + CONVERT(nvarchar(20), ABS(CONVERT(bigint, t.[ДеньМесяцаПолученияДокументов])) / 100) + N' мес., ' END +
+    CASE WHEN ABS(CONVERT(bigint, t.[ДеньМесяцаПолученияДокументов])) % 100 = 99 THEN N'последний день месяца'
+         ELSE CONVERT(nvarchar(2), ABS(CONVERT(bigint, t.[ДеньМесяцаПолученияДокументов])) % 100) + N'-е число' END AS DocumentsText,
+    CASE WHEN t.[ДеньМесяцаОплатыПоДоговору] < 0 THEN N'До начала периода' ELSE N'От начала периода' END + N': ' +
+    CASE WHEN ABS(CONVERT(bigint, t.[ДеньМесяцаОплатыПоДоговору])) / 100 = 0 THEN N'без смещения по месяцам, '
+         WHEN t.[ДеньМесяцаОплатыПоДоговору] < 0 THEN N'за ' + CONVERT(nvarchar(20), ABS(CONVERT(bigint, t.[ДеньМесяцаОплатыПоДоговору])) / 100) + N' мес., '
+         ELSE N'через ' + CONVERT(nvarchar(20), ABS(CONVERT(bigint, t.[ДеньМесяцаОплатыПоДоговору])) / 100) + N' мес., ' END +
+    CASE WHEN ABS(CONVERT(bigint, t.[ДеньМесяцаОплатыПоДоговору])) % 100 = 99 THEN N'последний день месяца'
+         ELSE CONVERT(nvarchar(2), ABS(CONVERT(bigint, t.[ДеньМесяцаОплатыПоДоговору])) % 100) + N'-е число' END AS PaymentText,
+    CASE WHEN t.[ДеньМесяцаОтключенияУслуги] < 0 THEN N'До начала периода' ELSE N'От начала периода' END + N': ' +
+    CASE WHEN ABS(CONVERT(bigint, t.[ДеньМесяцаОтключенияУслуги])) / 100 = 0 THEN N'без смещения по месяцам, '
+         WHEN t.[ДеньМесяцаОтключенияУслуги] < 0 THEN N'за ' + CONVERT(nvarchar(20), ABS(CONVERT(bigint, t.[ДеньМесяцаОтключенияУслуги])) / 100) + N' мес., '
+         ELSE N'через ' + CONVERT(nvarchar(20), ABS(CONVERT(bigint, t.[ДеньМесяцаОтключенияУслуги])) / 100) + N' мес., ' END +
+    CASE WHEN ABS(CONVERT(bigint, t.[ДеньМесяцаОтключенияУслуги])) % 100 = 99 THEN N'последний день месяца'
+         ELSE CONVERT(nvarchar(2), ABS(CONVERT(bigint, t.[ДеньМесяцаОтключенияУслуги])) % 100) + N'-е число' END AS DisconnectText
 FROM dbo.[ДокументыДоговораОказанияУслуг] AS t`
 
 const defaultGetSQL = `SELECT
@@ -98,14 +180,14 @@ ORDER BY t.[КодДокументаДоговораОказанияУслуг] 
 WHERE CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%'
 ORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC`,
 		ListColumns: []ListColumn{
-			{"ContractID", "Код договора", 120},
-			{"AgreementLabel", "Договор", 220},
-			{"ServicePeriodText", "Период", 120},
-			{"Amount", "Абонентская плата", 140},
-			{"DocumentsText", "Получение документов", 310},
-			{"PaymentText", "Оплата по договору", 310},
-			{"DisconnectText", "Отключение услуги", 310},
-			{"AutoPayText", "Автооплата", 90},
+			{Field: "ContractID", Title: "Код договора", Width: 120, Order: 1, SortField: "ContractID", Visible: true},
+			{Field: "AgreementLabel", Title: "Договор", Width: 220, Order: 2, SortField: "ContractID", Visible: true},
+			{Field: "ServicePeriodText", Title: "Период оказания услуги", Width: 200, Order: 3, SortField: "ServicePeriod", Visible: true},
+			{Field: "Amount", Title: "Абонентская плата", Width: 140, Order: 4, SortField: "Amount", Visible: true},
+			{Field: "DocumentsText", Title: "Получение документов", Width: 305, Order: 5, SortField: "DocumentsCode", Visible: true},
+			{Field: "PaymentText", Title: "Оплата по договору", Width: 305, Order: 6, SortField: "PaymentCode", Visible: true},
+			{Field: "DisconnectText", Title: "Отключение услуги", Width: 305, Order: 7, SortField: "DisconnectCode", Visible: true},
+			{Field: "AutoPayText", Title: "Автооплата", Width: 90, Order: 8, SortField: "AutoPay", Visible: true},
 		},
 		ContractsSQL: `SELECT TOP (@limit)
  d.[КодДокумента] AS ContractID,
@@ -177,20 +259,31 @@ func ValidateColumns(cols []ListColumn) error {
 	if len(cols) == 0 || len(cols) > 40 {
 		return errors.New("задайте от 1 до 40 колонок списка")
 	}
-	seen := map[string]bool{}
+	seenFields, seenOrders := map[string]bool{}, map[int]bool{}
+	visibleCount := 0
 	for i, col := range cols {
 		field := strings.TrimSpace(col.Field)
-		if field == "" || strings.TrimSpace(col.Title) == "" {
-			return fmt.Errorf("колонка %d: заполните поле и заголовок", i+1)
+		if field == "" || strings.TrimSpace(col.Title) == "" || strings.TrimSpace(col.SortField) == "" {
+			return fmt.Errorf("колонка %d: заполните field, title и sortField", i+1)
 		}
 		if col.Width < 45 || col.Width > 1600 {
 			return fmt.Errorf("колонка %d: ширина должна быть 45..1600", i+1)
 		}
+		if col.Order < 1 || col.Order > 1000 || seenOrders[col.Order] {
+			return fmt.Errorf("колонка %d: order должен быть уникальным числом от 1 до 1000", i+1)
+		}
+		seenOrders[col.Order] = true
 		lower := strings.ToLower(field)
-		if seen[lower] {
+		if seenFields[lower] {
 			return fmt.Errorf("колонка %d: повтор поля %s", i+1, field)
 		}
-		seen[lower] = true
+		seenFields[lower] = true
+		if col.Visible {
+			visibleCount++
+		}
+	}
+	if visibleCount == 0 {
+		return errors.New("должна быть хотя бы одна видимая колонка списка")
 	}
 	return nil
 }
@@ -215,6 +308,12 @@ func LoadConfig(path string) (Config, error) {
 			return Config{}, errors.New("в config.json более одного JSON-объекта")
 		}
 		return Config{}, fmt.Errorf("лишние данные после JSON: %w", err)
+	}
+	// Column settings added in v4; old columns were always visible and in array order.
+	for i := range c.ListColumns {
+		if c.ListColumns[i].Order == -1 {
+			c.ListColumns[i].Order = i + 1
+		}
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err

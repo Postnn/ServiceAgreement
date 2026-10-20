@@ -9,7 +9,7 @@ import (
 
 // XDD is a signed number of complete service-month boundaries followed by a
 // calendar day. The sign expresses whether a deadline is before or after the
-// cycle start, including X=0: +006 is stored as 6, -006 as -6.
+// period start, including X=0: +006 is stored as 6, -006 as -6.
 // Day=99 means the last calendar day (February 28/29 is calculated by year).
 // The database stores an int, not the leading zeros shown in the UI.
 type XDD struct {
@@ -114,8 +114,8 @@ func resolveMonthDay(year int, month time.Month, day int) (time.Time, bool) {
 	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC), true
 }
 
-// ResolveXDD provides a *calendar illustration* for a concrete cycle start.
-// For nonnegative codes X counts complete months after cycle start, then takes
+// ResolveXDD provides a *calendar illustration* for a concrete period start.
+// For nonnegative codes X counts complete months after period start, then takes
 // the first occurrence of DD not earlier than that boundary. This correctly
 // maps 306 for a 07 Jan start to 06 May, and 320 to 20 April.
 // For negative -NDD, N>=1 selects the Nth service-month window before start.

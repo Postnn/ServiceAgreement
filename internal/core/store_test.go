@@ -39,8 +39,8 @@ func (c *fakeSQLConn) QueryContext(_ context.Context, query string, args []drive
 	switch query {
 	case "query_list", "query_search":
 		return &fakeSQLRows{
-			names: []string{"ContractID", "CustomColumn", "ServicePeriod", "AutoPay", "StartDay", "StartMonth", "PaymentCode"},
-			rows:  [][]driver.Value{{int64(13068), []byte("Номер контракта"), int64(3), int64(1), int64(7), int64(1), int64(306)}},
+			names: []string{"ContractID", "CustomColumn", "ServicePeriod", "AutoPay", "PaymentCode", "PaymentText", "SortByHidden"},
+			rows:  [][]driver.Value{{int64(13068), []byte("Номер контракта"), int64(3), int64(1), int64(306), []byte("Оплата: до 6 мая"), int64(12)}},
 		}, nil
 	case "get_record":
 		return &fakeSQLRows{names: []string{"id", "type", "period", "auto", "amount", "day", "month", "docs", "pay", "off", "notify"},
@@ -82,7 +82,11 @@ func TestStoreUsesConfiguredQueriesAndDynamicColumns(t *testing.T) {
 	cfg.InsertSQL = "insert_record"
 	cfg.UpdateSQL = "update_record"
 	cfg.DeleteSQL = "delete_record"
-	cfg.ListColumns = []ListColumn{{Field: "ContractID", Title: "ID", Width: 80}, {Field: "CustomColumn", Title: "Контракт", Width: 250}, {Field: "PaymentText", Title: "Оплата", Width: 300}}
+	cfg.ListColumns = []ListColumn{
+		{Field: "ContractID", Title: "ID", Width: 80, Order: 1, SortField: "ContractID", Visible: true},
+		{Field: "CustomColumn", Title: "Контракт", Width: 250, Order: 2, SortField: "SortByHidden", Visible: true},
+		{Field: "PaymentText", Title: "Оплата", Width: 300, Order: 3, SortField: "PaymentCode", Visible: true},
+	}
 	store := Store{DB: db, Config: cfg}
 	ctx := context.Background()
 	rows, err := store.List(ctx, "  ")
@@ -95,8 +99,11 @@ func TestStoreUsesConfiguredQueriesAndDynamicColumns(t *testing.T) {
 	if len(rows) != 1 || rows[0].ID != 13068 || rows[0].Field("customcolumn") != "Номер контракта" {
 		t.Fatalf("dynamic rows: %+v", rows)
 	}
-	if rows[0].Field("PaymentText") == "" {
-		t.Fatal("XDD description missing")
+	if rows[0].Field("PaymentText") != "Оплата: до 6 мая" {
+		t.Fatalf("SQL-provided description was altered or lost: %q", rows[0].Field("PaymentText"))
+	}
+	if rows[0].Field("DocumentsText") != "" {
+		t.Fatal("unexpected derived/virtual column added", rows[0].Values)
 	}
 	_, err = store.List(ctx, "кот")
 	if err != nil || state.Query != "query_search" || state.Args["search"] != "кот" {
@@ -138,8 +145,19 @@ func TestListColumnsMustExist(t *testing.T) {
 	// the SELECT actually returns them, including when zero rows match.
 	cfg := DefaultConfig()
 	cfg.ConnectionString = "test"
-	cfg.ListColumns = []ListColumn{{Field: "ContractID", Title: "ID", Width: 80}, {Field: "CustomNotInQuery", Title: "Missing", Width: 100}}
+	cfg.ListColumns = []ListColumn{{Field: "ContractID", Title: "ID", Width: 80, Order: 1, SortField: "ContractID", Visible: true}, {Field: "CustomNotInQuery", Title: "Missing", Width: 100, Order: 2, SortField: "CustomNotInQuery", Visible: true}}
 	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateResultColumns([]string{"ContractID", "CustomColumn"}, cfg.ListColumns); err == nil {
+		t.Fatal("accepted a field not returned by SQL")
+	}
+	cfg.ListColumns[1].Field = "CustomColumn"
+	if _, err := ValidateResultColumns([]string{"ContractID", "CustomColumn"}, cfg.ListColumns); err == nil {
+		t.Fatal("accepted a missing sortField")
+	}
+	cfg.ListColumns[1].SortField = "ContractID"
+	if _, err := ValidateResultColumns([]string{"ContractID", "CustomColumn"}, cfg.ListColumns); err != nil {
 		t.Fatal(err)
 	}
 }
