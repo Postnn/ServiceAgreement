@@ -77,7 +77,7 @@ func ValidateResultColumns(names []string, columns []ListColumn) (int, error) {
 }
 
 func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
-    query, args, err := BuildListSearchQuery(s.Config.ListSQL, search, s.Config.ListLimit)
+    query, args, err := BuildListSearchQuery(s.Config.ListSQL, search, s.Config.ListLimit, s.Config.ListOrderBy)
     if err != nil {
         return nil, fmt.Errorf("список договоров с параметрами: %w", err)
     }
@@ -90,6 +90,14 @@ func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
 	if err != nil {
 		return nil, err
 	}
+    moneyType := make([]string, len(names))
+    if types, err := rows.ColumnTypes(); err == nil {
+        for i, typ := range types {
+            if i < len(moneyType) {
+                moneyType[i] = typ.DatabaseTypeName()
+            }
+        }
+    }
 	idColumn, err := ValidateResultColumns(names, s.Config.ListColumns)
 	if err != nil {
 		return nil, err
@@ -112,7 +120,7 @@ func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
 		}
 		item := ListItem{ID: id, Values: make(map[string]string, len(names)), Raw: make(map[string]any, len(names))}
 		for i, name := range names {
-			item.Values[name] = sqlText(values[i])
+			item.Values[name] = SQLDisplayValue(values[i], moneyType[i], name)
 			// The data stays fully SQL-sourced; []byte is copied because sql.Rows may reuse it.
 			if raw, ok := values[i].([]byte); ok {
 				item.Raw[name] = append([]byte(nil), raw...)

@@ -29,7 +29,9 @@ func synchronizeDraftColumns(owner walk.Form, cfg *core.Config) (bool, bool, err
 	}
 	defer db.Close()
 	ctx, cancel := cfg.QueryContext()
+    restore := beginSQLWait(owner)
 	err = db.PingContext(ctx)
+    restore()
 	cancel()
 	if err != nil {
 		return false, false, fmt.Errorf("%w: %v", errSQLUnavailable, err)
@@ -44,6 +46,7 @@ func (a *application) openSettings() {
 	var connection, listLimit, lookupLimit, connectionTimeout *walk.LineEdit
 	var sqlPicker *walk.ComboBox
 	var sqlEdit *walk.TextEdit
+    var orderEdit *walk.LineEdit
 	cfg := a.store.Config
 	cfg.ListColumns = append([]core.ListColumn(nil), cfg.ListColumns...)
 	selectedSQL := 0
@@ -55,6 +58,12 @@ func (a *application) openSettings() {
 	commitCurrentSQL := func() {
 		if sqlEdit != nil && selectedSQL >= 0 && selectedSQL < len(core.SQLFields) {
 			*cfg.SQLAt(selectedSQL) = sqlTextFromEditor(sqlEdit.Text())
+            if orderEdit != nil {
+                switch selectedSQL {
+                case 0: cfg.ListOrderBy = orderEdit.Text()
+                case 1: cfg.WithoutParametersOrderBy = orderEdit.Text()
+                }
+            }
 		}
 	}
 	// Switching queries must not reformat or trim the user's SQL. Preserve
@@ -70,6 +79,16 @@ func (a *application) openSettings() {
 		commitCurrentSQL()
 		selectedSQL = next
 		_ = sqlEdit.SetText(sqlTextForEditor(*cfg.SQLAt(selectedSQL)))
+        if orderEdit != nil {
+            orderText, enabled := "", true
+            switch selectedSQL {
+            case 0: orderText = cfg.ListOrderBy
+            case 1: orderText = cfg.WithoutParametersOrderBy
+            default: enabled = false
+            }
+            _ = orderEdit.SetText(orderText)
+            orderEdit.SetEnabled(enabled)
+        }
 	}
 	// Explicit button is the only place where SQL auto-formatting runs.
 	formatCurrentSQL := func() {
@@ -111,7 +130,9 @@ func (a *application) openSettings() {
             draft := cfg
             draft.ConnectionTimeoutSeconds = seconds
 			ctx, cancel := draft.QueryContext()
+            restore := beginSQLWait(dlg)
 			err = db.PingContext(ctx)
+            restore()
 			cancel()
 			_ = db.Close()
 		}
@@ -168,7 +189,7 @@ func (a *application) openSettings() {
 	}
 
 	err := Dialog{
-		AssignTo: &dlg, Title: "Настройки ServiceAgreement — SQL Server",
+		AssignTo: &dlg, Title: "Настройки ServiceAgreement — SQL Server", Icon: a.appIcon,
 		MinSize: Size{Width: 790, Height: 600}, Size: Size{Width: 1020, Height: 760},
 		Layout: VBox{Margins: Margins{Left: 14, Top: 12, Right: 14, Bottom: 12}, Spacing: 6},
 		Children: []Widget{
@@ -201,6 +222,13 @@ func (a *application) openSettings() {
 				ComboBox{AssignTo: &sqlPicker, Model: sqlNames, CurrentIndex: 0, OnCurrentIndexChanged: onSQLChanged},
 				PushButton{Text: "Форматировать SQL", OnClicked: formatCurrentSQL},
 			}},
+            Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
+                Label{Text: "Сортировка по умолчанию (ORDER BY):"},
+                LineEdit{AssignTo: &orderEdit, Text: cfg.ListOrderBy,
+                    MinSize: Size{Width: 290},
+                    CueBanner: "[Поле1] ASC, [Поле2] DESC",
+                    ToolTipText: "Поля результата SELECT: например, [Договор] ASC, Amount DESC"},
+            }},
 			TextEdit{AssignTo: &sqlEdit, Text: sqlTextForEditor(cfg.ListSQL), VScroll: true, HScroll: true,
 				Font: Font{Family: "Consolas", PointSize: 10}},
 			Label{Text: "SQL-параметры @search, @limit, @selected, @id и параметры записи описаны в README. Порядок SELECT для одной записи важен."},
@@ -379,7 +407,7 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 		dlg.Accept()
 	}
 	err := Dialog{
-		AssignTo: &dlg, Title: "Колонки списка — порядок, сортировка и видимость",
+		AssignTo: &dlg, Title: "Колонки списка — порядок, сортировка и видимость", Icon: a.appIcon,
 		MinSize: Size{Width: 870, Height: 540}, Size: Size{Width: 1090, Height: 660},
 		Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}, Spacing: 8},
 		Children: []Widget{

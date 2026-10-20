@@ -86,6 +86,8 @@ type Config struct {
 	ListLimit        int          `json:"list_limit"`
 	LookupLimit      int          `json:"lookup_limit"`
 	ListSQL          string       `json:"list_sql"`
+    ListOrderBy      string       `json:"list_order_by"`
+    WithoutParametersOrderBy string `json:"without_parameters_order_by"`
 	WithoutParametersSQL string `json:"without_parameters_sql"`
 	ListColumns      []ListColumn `json:"list_columns"`
 	ContractsSQL     string       `json:"contracts_sql"`
@@ -256,6 +258,8 @@ func DefaultConfig() Config {
 		ListLimit:        200, LookupLimit: 100,
 		WithoutParametersSQL: defaultWithoutParametersSQL,
 		ListSQL: listProjection,
+        ListOrderBy: "ContractID DESC",
+        WithoutParametersOrderBy: "ContractID DESC",
 		ListColumns: []ListColumn{
 			{Field: "ContractID", Title: "Код договора", Width: 120, Order: 1, SortField: "ContractID", Visible: false},
 			{Field: "AgreementLabel", Title: "Договор", Width: 220, Order: 2, SortField: "ContractID", Visible: true},
@@ -329,7 +333,13 @@ func (c Config) Validate() error {
     if c.ListLimit < 1 || c.ListLimit > 1000 || c.LookupLimit < 1 || c.LookupLimit > 500 {
 		return errors.New("list_limit должен быть 1..1000, lookup_limit — 1..500")
 	}
-	return ValidateColumns(c.ListColumns)
+	if _, err := CompileDefaultOrderBy(c.ListOrderBy); err != nil {
+        return fmt.Errorf("list_order_by: %w", err)
+    }
+    if _, err := CompileDefaultOrderBy(c.WithoutParametersOrderBy); err != nil {
+        return fmt.Errorf("without_parameters_order_by: %w", err)
+    }
+    return ValidateColumns(c.ListColumns)
 }
 
 func ValidateColumns(cols []ListColumn) error {

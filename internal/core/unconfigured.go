@@ -44,7 +44,7 @@ func (s Store) ListUnconfigured(ctx context.Context, search string) (Unconfigure
 	if s.DB == nil {
 		return UnconfiguredResult{}, fmt.Errorf("не задано соединение с SQL Server")
 	}
-	query, args, err := BuildListSearchQuery(s.Config.WithoutParametersSQL, search, s.Config.ListLimit)
+	query, args, err := BuildListSearchQuery(s.Config.WithoutParametersSQL, search, s.Config.ListLimit, s.Config.WithoutParametersOrderBy)
 	if err != nil {
 		return UnconfiguredResult{}, fmt.Errorf("without_parameters_sql: %w", err)
 	}
@@ -57,6 +57,12 @@ func (s Store) ListUnconfigured(ctx context.Context, search string) (Unconfigure
 	if err != nil {
 		return UnconfiguredResult{}, err
 	}
+    moneyType := make([]string, len(names))
+    if types, err := rows.ColumnTypes(); err == nil {
+        for i, typ := range types {
+            if i < len(moneyType) { moneyType[i] = typ.DatabaseTypeName() }
+        }
+    }
 	if _, err := columnNames(names); err != nil {
 		return UnconfiguredResult{}, fmt.Errorf("without_parameters_sql: %w", err)
 	}
@@ -83,7 +89,7 @@ func (s Store) ListUnconfigured(ctx context.Context, search string) (Unconfigure
 		}
 		item := ListItem{ID: id, Values: make(map[string]string, len(names)), Raw: make(map[string]any, len(names))}
 		for i, name := range names {
-			item.Values[name] = sqlText(values[i])
+			item.Values[name] = SQLDisplayValue(values[i], moneyType[i], name)
 			if bytes, ok := values[i].([]byte); ok {
 				item.Raw[name] = append([]byte(nil), bytes...)
 			} else {

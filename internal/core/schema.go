@@ -100,7 +100,7 @@ func ReconcileListColumns(existing []ListColumn, names []string) (ColumnSync, er
 // QueryListSchema reads metadata only from list_sql. The word search is an
 // outer SELECT, so no secondary search_sql or cross-query comparison exists.
 func QueryListSchema(ctx context.Context, db *sql.DB, cfg Config) ([]string, error) {
-    query, args, err := BuildListSearchQuery(cfg.ListSQL, "", 1)
+    query, args, err := BuildListSearchQuery(cfg.ListSQL, "", 1, cfg.ListOrderBy)
     if err != nil {
         return nil, fmt.Errorf("list_sql: %w", err)
     }

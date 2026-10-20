@@ -12,15 +12,18 @@ import (
 	"strings"
 
 	"github.com/Postnn/ServiceAgreement/internal/core"
+    "github.com/Postnn/ServiceAgreement/internal/appicon"
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 	_ "github.com/microsoft/go-mssqldb"
 )
 
 type tableModel struct {
-	walk.TableModelBase
-	items   []core.ListItem
-	columns []core.ListColumn
+    walk.TableModelBase
+    items    []core.ListItem // visible after filters
+    allItems []core.ListItem // all SQL rows fetched (up to list_limit)
+    columns  []core.ListColumn
+    filters  core.ColumnFilterState
 }
 
 func (m *tableModel) RowCount() int { return len(m.items) }
@@ -30,12 +33,20 @@ func (m *tableModel) Value(row, col int) interface{} {
 	}
 	return m.items[row].Field(m.columns[col].Field)
 }
-func (m *tableModel) replace(rows []core.ListItem) { m.items = rows; m.PublishRowsReset() }
+func (m *tableModel) replace(rows []core.ListItem) {
+    m.allItems = rows
+    if m.filters == nil { m.filters = make(core.ColumnFilterState) }
+    m.applyFilters()
+}
+func (m *tableModel) applyFilters() {
+    m.items = m.filters.Apply(m.allItems)
+    m.PublishRowsReset()
+}
 
 func tableColumns(c []core.ListColumn) []TableViewColumn {
 	result := make([]TableViewColumn, 0, len(c))
 	for _, col := range core.VisibleColumns(c) {
-		result = append(result, TableViewColumn{Name: col.Field, Title: col.Title, Width: col.Width})
+		result = append(result, TableViewColumn{Name: col.Field, Title: filterHeaderTitle(col,false), Width: col.Width})
 	}
 	return result
 }
@@ -44,6 +55,7 @@ type application struct {
 	cfgPath        string
 	store          core.Store
 	win            *walk.MainWindow
+    appIcon        *walk.Icon
 	table          *walk.TableView
 	search         *walk.LineEdit
 	status         *walk.Label
@@ -75,13 +87,16 @@ func run() error {
 		cfg = core.DefaultConfig()
 	}
 	app := &application{cfgPath: path, store: core.Store{Config: cfg}, model: &tableModel{columns: core.VisibleColumns(cfg.ListColumns)}, withoutModel: &tableModel{columns: core.UnconfiguredColumns([]string{"ContractID", "Договор"})}}
+	app.appIcon, err = walk.NewIconFromImage(appicon.Render(48))
+    if err != nil { return fmt.Errorf("создание иконки приложения: %w",err) }
+    defer app.appIcon.Dispose()
 	gearIcon, err := makeSettingsGearBitmap()
 	if err != nil {
 		return fmt.Errorf("значок настроек: %w", err)
 	}
 	defer gearIcon.Dispose()
 	err = MainWindow{
-		AssignTo: &app.win, Title: "Договоры оказания услуг — ServiceAgreement",
+		AssignTo: &app.win, Icon: app.appIcon, Title: "Договоры оказания услуг — ServiceAgreement",
 		MinSize: Size{Width: 850, Height: 490}, Size: Size{Width: 1370, Height: 680},
 		Layout: VBox{Margins: Margins{Left: 12, Top: 4, Right: 12, Bottom: 12}, Spacing: 3},
 		Children: []Widget{
@@ -123,7 +138,7 @@ func run() error {
 						TableView{AssignTo: &app.table, Model: app.model, AlternatingRowBG: true,
 							MultiSelection: false, Columns: tableColumns(cfg.ListColumns),
 							OnItemActivated: app.editSelected},
-						Label{Text: "Все значения возвращает SQL. Заголовок колонки сортирует по sortField."},
+						Label{Text: "Нажмите ▾ в заголовке, чтобы сортировать или отфильтровать значения. Фильтрация — по загруженным строкам."},
 						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 							PushButton{Text: "Добавить", OnClicked: app.add},
 							PushButton{Text: "Изменить", OnClicked: app.editSelected},
@@ -149,7 +164,7 @@ func run() error {
 							AlternatingRowBG: true, MultiSelection: false,
 							Columns: tableColumns(app.withoutModel.columns),
 							OnItemActivated: app.addFromWithout},
-						Label{Text: "Все поля из without_parameters_sql отображаются. Двойной щелчок открывает добавление параметров."},
+						Label{Text: "Нажмите ▾ в заголовке для фильтра. Двойной щелчок открывает добавление параметров."},
 						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 							PushButton{Text: "Задать параметры", OnClicked: app.addFromWithout},
 							HSpacer{}, Label{AssignTo: &app.withoutStatus, Text: ""},
@@ -162,8 +177,8 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("создание главного окна: %w", err)
 	}
-	app.table.ColumnClicked().Attach(app.sortByColumn)
-	app.withoutTable.ColumnClicked().Attach(app.sortWithoutByColumn)
+	app.table.ColumnClicked().Attach(func(i int){app.showColumnFilter(i,false)})
+    app.withoutTable.ColumnClicked().Attach(func(i int){app.showColumnFilter(i,true)})
 	if loadErr != nil {
 		app.status.SetText("Требуется настройка config.json — нажмите значок ⚙ справа вверху")
 	} else if err := app.connect(cfg); err != nil {
@@ -186,7 +201,9 @@ func (a *application) connect(cfg core.Config) error {
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
 	ctx, cancel := cfg.QueryContext()
+    restore := beginSQLWait(a.win)
 	err = db.PingContext(ctx)
+    restore()
 	cancel()
 	if err != nil {
 		db.Close()
@@ -205,11 +222,12 @@ func (a *application) applyColumns(cols []core.ListColumn) error {
 		return err
 	}
 	a.model.columns = core.VisibleColumns(cols)
+    a.model.filters.KeepFields(a.model.columns)
 	a.sortField, a.sortDescending = "", false
 	for _, col := range a.model.columns {
 		c := walk.NewTableViewColumn()
 		c.SetName(col.Field)
-		_ = c.SetTitle(col.Title)
+		_ = c.SetTitle(filterHeaderTitle(col,a.model.filters.Active(col.Field)))
 		_ = c.SetWidth(col.Width)
 		if err := a.table.Columns().Add(c); err != nil {
 			return err
@@ -219,31 +237,14 @@ func (a *application) applyColumns(cols []core.ListColumn) error {
 	return nil
 }
 
-func (a *application) sortByColumn(index int) {
-	if index < 0 || index >= len(a.model.columns) {
-		return
-	}
-	field := a.model.columns[index].SortField
-	if a.sortField == field {
-		a.sortDescending = !a.sortDescending
-	} else {
-		a.sortField, a.sortDescending = field, false
-	}
-	core.SortListItems(a.model.items, a.sortField, a.sortDescending)
-	a.model.PublishRowsReset()
-	arrow := "↑"
-	if a.sortDescending {
-		arrow = "↓"
-	}
-	a.status.SetText(fmt.Sprintf("Записей: %d; сортировка: %s %s", len(a.model.items), field, arrow))
-}
-
 // mergeColumnsFromSQL reconciles the stored appearance settings with both SQL
 // result sets. New SELECT aliases are visible by default. SQL fields which
 // were removed are discarded only after the user confirms the proposal.
 func reconcileColumnSettings(owner walk.Form, db *sql.DB, cfg *core.Config) (bool, bool, error) {
 	ctx, cancel := cfg.QueryContext()
+    restore := beginSQLWait(owner)
 	names, err := core.QueryListSchema(ctx, db, *cfg)
+    restore()
 	cancel()
 	if err != nil {
 		return false, false, err
@@ -305,14 +306,17 @@ func (a *application) refresh() {
 	}
 	ctx, cancel := a.store.Config.QueryContext()
 	defer cancel()
-	rows, err := a.store.List(ctx, a.search.Text())
+	restore := beginSQLWait(a.win)
+    rows, err := a.store.List(ctx, a.search.Text())
+    restore()
 	if err != nil {
 		a.warn("Ошибка чтения списка", err)
 		return
 	}
 	core.SortListItems(rows, a.sortField, a.sortDescending)
-	a.model.replace(rows)
-	a.status.SetText(fmt.Sprintf("Записей: %d", len(rows)))
+    a.model.replace(rows)
+    a.updateColumnFilterTitles(a.table,a.model)
+    a.updateFilteredStatus(false)
 }
 func (a *application) selectedID() int {
 	if a.table == nil {
@@ -341,7 +345,9 @@ func (a *application) editSelected() {
 		return
 	}
 	ctx, cancel := a.store.Config.QueryContext()
-	r, err := a.store.Get(ctx, id)
+	restore := beginSQLWait(a.win)
+    r, err := a.store.Get(ctx, id)
+    restore()
 	cancel()
 	if err != nil {
 		a.warn("Ошибка чтения записи", err)
@@ -362,7 +368,9 @@ func (a *application) deleteSelected() {
 		return
 	}
 	ctx, cancel := a.store.Config.QueryContext()
-	err := a.store.Delete(ctx, id)
+	restore := beginSQLWait(a.win)
+    err := a.store.Delete(ctx, id)
+    restore()
 	cancel()
 	if err != nil {
 		a.warn("Ошибка удаления", err)
@@ -392,11 +400,12 @@ func (a *application) applyUnconfiguredColumns(names []string) error {
 	if unchanged { return nil }
 	if err := a.withoutTable.Columns().Clear(); err != nil { return err }
 	a.withoutModel.columns = cols
+    a.withoutModel.filters.KeepFields(cols)
 	a.withoutSortField, a.withoutSortDescending = "", false
 	for _, col := range cols {
 		c := walk.NewTableViewColumn()
 		c.SetName(col.Field)
-		_ = c.SetTitle(col.Title)
+		_ = c.SetTitle(filterHeaderTitle(col,a.withoutModel.filters.Active(col.Field)))
 		_ = c.SetWidth(col.Width)
 		if err := a.withoutTable.Columns().Add(c); err != nil { return err }
 	}
@@ -411,7 +420,9 @@ func (a *application) refreshWithout() {
 	}
 	ctx, cancel := a.store.Config.QueryContext()
 	defer cancel()
-	result, err := a.store.ListUnconfigured(ctx, a.withoutSearch.Text())
+	restore := beginSQLWait(a.win)
+    result, err := a.store.ListUnconfigured(ctx, a.withoutSearch.Text())
+    restore()
 	if err != nil {
 		a.warn("Договоры без параметров", err)
 		a.withoutStatus.SetText("Ошибка получения списка")
@@ -422,17 +433,9 @@ func (a *application) refreshWithout() {
 		return
 	}
 	core.SortListItems(result.Items, a.withoutSortField, a.withoutSortDescending)
-	a.withoutModel.replace(result.Items)
-	a.withoutStatus.SetText(fmt.Sprintf("Договоров без параметров: %d", len(result.Items)))
-}
-
-func (a *application) sortWithoutByColumn(index int) {
-	if index < 0 || index >= len(a.withoutModel.columns) { return }
-	field := a.withoutModel.columns[index].Field
-	if a.withoutSortField == field { a.withoutSortDescending = !a.withoutSortDescending
-	} else { a.withoutSortField, a.withoutSortDescending = field, false }
-	core.SortListItems(a.withoutModel.items, a.withoutSortField, a.withoutSortDescending)
-	a.withoutModel.PublishRowsReset()
+    a.withoutModel.replace(result.Items)
+    a.updateColumnFilterTitles(a.withoutTable,a.withoutModel)
+    a.updateFilteredStatus(true)
 }
 
 func (a *application) addFromWithout() {

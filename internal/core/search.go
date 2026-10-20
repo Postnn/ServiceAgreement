@@ -12,7 +12,18 @@ import (
 // project ContractID and SearchText, and must not apply TOP before searching.
 // Each search word is a named SQL parameter: user input is never interpolated
 // into SQL source. The limit is applied only AFTER the word predicates.
-func BuildListSearchQuery(baseSQL, search string, limit int) (string, []any, error) {
+func BuildListSearchQuery(baseSQL, search string, limit int, orderSpec ...string) (string, []any, error) {
+    if len(orderSpec) > 1 {
+        return "", nil, fmt.Errorf("ожидается один список полей сортировки")
+    }
+    sortSetting := ""
+    if len(orderSpec) == 1 {
+        sortSetting = orderSpec[0]
+    }
+    compiledOrder, err := CompileDefaultOrderBy(sortSetting)
+    if err != nil {
+        return "", nil, fmt.Errorf("неверная сортировка по умолчанию: %w", err)
+    }
     base := strings.TrimSpace(baseSQL)
     for strings.HasSuffix(base, ";") {
         base = strings.TrimSpace(strings.TrimSuffix(base, ";"))
@@ -67,7 +78,7 @@ func BuildListSearchQuery(baseSQL, search string, limit int) (string, []any, err
         query.WriteString(" + N'%' ESCAPE N'~')")
         args = append(args, sql.Named(name, escapeSearchLikeWord(word)))
     }
-    query.WriteString("\nORDER BY [Source].[ContractID] DESC")
+    query.WriteString("\nORDER BY ")\n    query.WriteString(compiledOrder)
     return query.String(), args, nil
 }
 

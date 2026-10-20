@@ -24,8 +24,10 @@ jobs:
         run: go test -count=1 -v ./...
       - name: Static checks
         run: go vet ./...
-      - name: Embed Win32 manifest
-        run: go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -manifest app.manifest -o cmd/serviceagreement/rsrc_windows_amd64.syso
+      - name: Generate agreement application icon
+        run: go run ./tools/appicon build/ServiceAgreement.ico
+      - name: Embed Win32 manifest and application icon
+        run: go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -manifest app.manifest -ico build/ServiceAgreement.ico -o cmd/serviceagreement/rsrc_windows_amd64.syso
       - name: Prepare output directory
         shell: pwsh
         run: New-Item -ItemType Directory -Path stage -Force | Out-Null
