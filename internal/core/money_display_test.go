@@ -34,3 +34,26 @@ func TestSQLDisplayValueFormatsMoneyBySQLType(t *testing.T) {
         t.Fatalf("non-money text changed: %s",got)
     }
 }
+
+func TestMoneyEditorN2PreservesUnchangedSQLMoneyPrecision(t *testing.T) {
+    exactOriginal := "1234.5678"
+    initial,ok:=MoneyDisplayN2(exactOriginal)
+    if !ok || initial!="1\u00a0234,57" {t.Fatalf("N2 initial %q",initial)}
+    stillExact,err:=MoneyValueFromEditor(initial,initial,exactOriginal)
+    if err!=nil || stillExact!=exactOriginal {
+        t.Fatalf("untouched edit rounded SQL money: %q %v",stillExact,err)
+    }
+    changed,err:=MoneyValueFromEditor("1 235,40",initial,exactOriginal)
+    if err!=nil || changed!="1235.4000" {
+        t.Fatalf("edited Russian N2 value: %q %v",changed,err)
+    }
+    changed,err=ParseMoneyEditorText("1\u00a0235,40")
+    if err!=nil || changed!="1235.4000" {
+        t.Fatalf("NBSP thousands separator: %q %v",changed,err)
+    }
+    for _,bad:=range []string{"1,2,3","wrong","1 234,12345"} {
+        if _,err:=ParseMoneyEditorText(bad);err==nil {
+            t.Errorf("invalid N2 accepted: %q",bad)
+        }
+    }
+}
