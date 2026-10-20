@@ -57,6 +57,8 @@ func (a *application) openSettings() {
 			*cfg.SQLAt(selectedSQL) = sqlTextFromEditor(sqlEdit.Text())
 		}
 	}
+	// Switching queries must not reformat or trim the user's SQL. Preserve
+	// all indentation, spaces, tabs, blank lines, and comments as entered.
 	onSQLChanged := func() {
 		if sqlPicker == nil || sqlEdit == nil {
 			return
@@ -67,8 +69,9 @@ func (a *application) openSettings() {
 		}
 		commitCurrentSQL()
 		selectedSQL = next
-		_ = sqlEdit.SetText(sqlTextForEditor(core.FormatSQL(*cfg.SQLAt(selectedSQL))))
+		_ = sqlEdit.SetText(sqlTextForEditor(*cfg.SQLAt(selectedSQL)))
 	}
+	// Explicit button is the only place where SQL auto-formatting runs.
 	formatCurrentSQL := func() {
 		if sqlEdit != nil {
 			_ = sqlEdit.SetText(sqlTextForEditor(core.FormatSQL(sqlTextFromEditor(sqlEdit.Text()))))
@@ -170,7 +173,7 @@ func (a *application) openSettings() {
 				ComboBox{AssignTo: &sqlPicker, Model: sqlNames, CurrentIndex: 0, OnCurrentIndexChanged: onSQLChanged},
 				PushButton{Text: "Форматировать SQL", OnClicked: formatCurrentSQL},
 			}},
-			TextEdit{AssignTo: &sqlEdit, Text: sqlTextForEditor(core.FormatSQL(cfg.ListSQL)), VScroll: true, HScroll: true,
+			TextEdit{AssignTo: &sqlEdit, Text: sqlTextForEditor(cfg.ListSQL), VScroll: true, HScroll: true,
 				Font: Font{Family: "Consolas", PointSize: 10}},
 			Label{Text: "SQL-параметры @search, @limit, @selected, @id и параметры записи описаны в README. Порядок SELECT для одной записи важен."},
 			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
