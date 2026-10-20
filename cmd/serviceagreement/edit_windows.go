@@ -158,13 +158,19 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 	}
 	updateAmountDisplay := func() {
         if amount == nil || amountHint == nil { return }
-        if text, ok := core.MoneyDisplayN2(amount.Text()); ok {
-            amountHint.SetText("Отображение (N2): " + text)
+        if exact, err := core.MoneyValueFromEditor(amount.Text(), displayedAmount, original.Amount); err == nil {
+            if text, ok := core.MoneyDisplayN2(exact); ok {
+                amountHint.SetText("Вид N2: " + text + " — исходная точность SQL money сохраняется, пока сумма не изменена")
+            }
         } else {
-            amountHint.SetText("Введите сумму числом с точкой; в БД сохраняется точное значение с четырьмя знаками")
+            amountHint.SetText("Введите сумму в формате N2, например 1 234,56")
         }
     }
-	var saved bool
+	displayedAmount, amountFormatOK := core.MoneyDisplayN2(original.Amount)
+    if !amountFormatOK {
+        displayedAmount = original.Amount
+    }
+    var saved bool
 	onSave := func() {
 		readInt := func(label string, e *walk.LineEdit) (int, error) { return core.ParseIntField(label, e.Text()) }
 		d, err := readInt("День начала периода", day)
@@ -192,10 +198,15 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 			a.warn("Некорректное значение", err)
 			return
 		}
-		updated := core.Record{
+		storedAmount, err := core.MoneyValueFromEditor(amount.Text(), displayedAmount, original.Amount)
+        if err != nil {
+            a.warn("Сумма абонентской платы", err)
+            return
+        }
+        updated := core.Record{
 			ContractID: contractChoice.value(),
 			TypeID:     typeChoice.value(), Period: period,
-			Amount: strings.TrimSpace(amount.Text()), StartDay: d, StartMonth: monthBox.CurrentIndex() + 1,
+			Amount: storedAmount, StartDay: d, StartMonth: monthBox.CurrentIndex() + 1,
 			DocumentsCode: docCode, PaymentCode: payCode, DisconnectCode: offCode,
 		}
 		if lockContract {
@@ -274,7 +285,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 				Label{Text: "Автооплата:"},
 				CheckBox{AssignTo: &autoBox, Text: "Создавать служебку автоматически", Checked: original.AutoPay == 1},
 				Label{Text: "Сумма абонентской платы:"},
-				LineEdit{AssignTo: &amount, Text: original.Amount, OnTextChanged: updateAmountDisplay},
+				LineEdit{AssignTo: &amount, Text: displayedAmount, OnTextChanged: updateAmountDisplay},
                 Label{AssignTo: &amountHint, Text: ""},
 				Label{Text: "День начала периода (1–31):"},
 				LineEdit{AssignTo: &day, Text: intText(original.StartDay), OnTextChanged: func() { updateExamples() }},
