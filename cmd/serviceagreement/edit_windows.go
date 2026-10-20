@@ -42,12 +42,12 @@ func chosenDay(idx int) (int, error) {
 
 // edit displays the record-editing dialog.
 func (a *application) edit(original core.Record, existing bool) bool {
-	return a.editWithContract(original, existing, false)
+	return a.editWithContract(original, existing, false, "")
 }
 
 // The second list fixes ContractID to the selected agreement while all other
 // service terms remain editable. No additional edit form is needed.
-func (a *application) editWithContract(original core.Record, existing bool, lockContract bool) bool {
+func (a *application) editWithContract(original core.Record, existing bool, lockContract bool, contractLabel string) bool {
 	var dlg *walk.Dialog
 	var amount, day *walk.LineEdit
 	var docMonths, payMonths, offMonths *walk.LineEdit
@@ -68,6 +68,13 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 		return false
 	}
 	contractOptions = addMissing(contractOptions, original.ContractID)
+	if lockContract && strings.TrimSpace(contractLabel) != "" {
+		for i := range contractOptions {
+			if contractOptions[i].ID == original.ContractID {
+				contractOptions[i].Label = contractLabel
+			}
+		}
+	}
 	typeOptions, err := lookup(a.store.Config.DocumentTypesSQL, "", original.TypeID)
 	if err != nil {
 		a.warn("Ошибка выбора типа документа", err)
