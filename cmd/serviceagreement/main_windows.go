@@ -64,7 +64,6 @@ func run() error {
 	}
 	path := filepath.Join(filepath.Dir(exe), "config.json")
 	cfg, loadErr := core.LoadConfig(path)
-	app.table.ColumnClicked().Attach(app.sortByColumn)
 	if loadErr != nil {
 		cfg = core.DefaultConfig()
 	}
@@ -101,6 +100,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("создание главного окна: %w", err)
 	}
+	app.table.ColumnClicked().Attach(app.sortByColumn)
 	if loadErr != nil {
 		app.status.SetText("Требуется настройка config.json — нажмите «Настройки SQL и колонок»")
 	} else if err := app.connect(cfg); err != nil {
