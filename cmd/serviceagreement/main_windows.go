@@ -48,6 +48,12 @@ type application struct {
 	search         *walk.LineEdit
 	status         *walk.Label
 	model          *tableModel
+	withoutTable   *walk.TableView
+	withoutSearch  *walk.LineEdit
+	withoutStatus  *walk.Label
+	withoutModel   *tableModel
+	withoutSortField string
+	withoutSortDescending bool
 	sortField      string
 	sortDescending bool
 }
@@ -68,46 +74,80 @@ func run() error {
 	if loadErr != nil {
 		cfg = core.DefaultConfig()
 	}
-	app := &application{cfgPath: path, store: core.Store{Config: cfg}, model: &tableModel{columns: core.VisibleColumns(cfg.ListColumns)}}
+	app := &application{cfgPath: path, store: core.Store{Config: cfg}, model: &tableModel{columns: core.VisibleColumns(cfg.ListColumns)}, withoutModel: &tableModel{columns: core.UnconfiguredColumns([]string{"ContractID"})}}
 	err = MainWindow{
 		AssignTo: &app.win, Title: "Договоры оказания услуг — ServiceAgreement",
 		MinSize: Size{Width: 850, Height: 490}, Size: Size{Width: 1370, Height: 680},
 		Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}, Spacing: 8},
 		Children: []Widget{
-			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-				Label{Text: "Поиск по договору:"},
-				LineEdit{AssignTo: &app.search, CueBanner: "Введите код или название; Enter — искать", OnKeyDown: func(key walk.Key) {
-					if key == walk.KeyReturn {
-						app.refresh()
-					}
-				}},
-				PushButton{Text: "Найти", OnClicked: app.refresh},
-				PushButton{Text: "Обновить", OnClicked: app.refresh},
+			TabWidget{Pages: []TabPage{
+				{
+					Title: "Договоры с параметрами",
+					Layout: VBox{Margins: Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 8},
+					Children: []Widget{
+						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
+							Label{Text: "Поиск по договору:"},
+							LineEdit{AssignTo: &app.search, CueBanner: "Код или название; Enter — искать",
+								OnKeyDown: func(key walk.Key) {
+									if key == walk.KeyReturn { app.refresh() }
+								}},
+							PushButton{Text: "Найти", OnClicked: app.refresh},
+							PushButton{Text: "Обновить", OnClicked: app.refresh},
+						}},
+						TableView{AssignTo: &app.table, Model: app.model, AlternatingRowBG: true,
+							MultiSelection: false, Columns: tableColumns(cfg.ListColumns),
+							OnItemActivated: app.editSelected},
+						Label{Text: "Все значения возвращает SQL. Заголовок колонки сортирует по sortField."},
+						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
+							PushButton{Text: "Добавить", OnClicked: app.add},
+							PushButton{Text: "Изменить", OnClicked: app.editSelected},
+							PushButton{Text: "Удалить", OnClicked: app.deleteSelected},
+							HSpacer{}, Label{AssignTo: &app.status, Text: ""},
+						}},
+					},
+				},
+				{
+					Title: "Договоры без параметров",
+					Layout: VBox{Margins: Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 8},
+					Children: []Widget{
+						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
+							Label{Text: "Поиск по коду или названию:"},
+							LineEdit{AssignTo: &app.withoutSearch, CueBanner: "Код или название; Enter — искать",
+								OnKeyDown: func(key walk.Key) {
+									if key == walk.KeyReturn { app.refreshWithout() }
+								}},
+							PushButton{Text: "Найти", OnClicked: app.refreshWithout},
+							PushButton{Text: "Обновить", OnClicked: app.refreshWithout},
+						}},
+						TableView{AssignTo: &app.withoutTable, Model: app.withoutModel,
+							AlternatingRowBG: true, MultiSelection: false,
+							Columns: tableColumns(app.withoutModel.columns),
+							OnItemActivated: app.addFromWithout},
+						Label{Text: "Все поля из without_parameters_sql отображаются. Двойной щелчок открывает добавление параметров."},
+						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
+							PushButton{Text: "Задать параметры", OnClicked: app.addFromWithout},
+							HSpacer{}, Label{AssignTo: &app.withoutStatus, Text: ""},
+						}},
+					},
+				},
 			}},
-			TableView{AssignTo: &app.table, Model: app.model, AlternatingRowBG: true,
-				MultiSelection: false,
-				Columns:        tableColumns(cfg.ListColumns), OnItemActivated: app.editSelected,
-			},
-			Label{Text: "Все значения списка берутся из SQL. Щёлкните заголовок колонки для сортировки по её sortField."},
 			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-				PushButton{Text: "Добавить", OnClicked: app.add},
-				PushButton{Text: "Изменить", OnClicked: app.editSelected},
-				PushButton{Text: "Удалить", OnClicked: app.deleteSelected},
 				PushButton{Text: "Настройки SQL и колонок…", OnClicked: app.openSettings},
-				HSpacer{}, Label{AssignTo: &app.status, Text: ""},
 			}},
+
 		},
 	}.Create()
 	if err != nil {
 		return fmt.Errorf("создание главного окна: %w", err)
 	}
 	app.table.ColumnClicked().Attach(app.sortByColumn)
+	app.withoutTable.ColumnClicked().Attach(app.sortWithoutByColumn)
 	if loadErr != nil {
 		app.status.SetText("Требуется настройка config.json — нажмите «Настройки SQL и колонок»")
 	} else if err := app.connect(cfg); err != nil {
 		app.status.SetText("Нет подключения к SQL Server — проверьте настройки")
 	} else {
-		app.refresh()
+		app.refreshBoth()
 	}
 	app.win.Run()
 	if app.store.DB != nil {
@@ -269,7 +309,7 @@ func (a *application) add() {
 	}
 	r := core.Record{Period: 1, StartDay: 1, StartMonth: 1, DocumentsCode: 99, PaymentCode: 99, DisconnectCode: 99, Amount: "0.0000"}
 	if a.edit(r, false) {
-		a.refresh()
+		a.refreshBoth()
 	}
 }
 func (a *application) editSelected() {
@@ -286,7 +326,7 @@ func (a *application) editSelected() {
 		return
 	}
 	if a.edit(r, true) {
-		a.refresh()
+		a.refreshBoth()
 	}
 }
 func (a *application) deleteSelected() {
@@ -306,7 +346,90 @@ func (a *application) deleteSelected() {
 		a.warn("Ошибка удаления", err)
 		return
 	}
+	a.refreshBoth()
+}
+
+// Both lists are refreshed after every successful insert, update or delete.
+// Each retains its own search text, so filtered results remain predictable.
+func (a *application) refreshBoth() {
 	a.refresh()
+	a.refreshWithout()
+}
+
+func (a *application) applyUnconfiguredColumns(names []string) error {
+	unchanged := len(a.withoutModel.columns) == len(names)
+	if unchanged {
+		for i, name := range names {
+			if !strings.EqualFold(a.withoutModel.columns[i].Field, name) {
+				unchanged = false
+				break
+			}
+		}
+	}
+	if unchanged { return nil }
+	if err := a.withoutTable.Columns().Clear(); err != nil { return err }
+	cols := core.UnconfiguredColumns(names)
+	a.withoutModel.columns = cols
+	a.withoutSortField, a.withoutSortDescending = "", false
+	for _, col := range cols {
+		c := walk.NewTableViewColumn()
+		c.SetName(col.Field)
+		_ = c.SetTitle(col.Title)
+		_ = c.SetWidth(col.Width)
+		if err := a.withoutTable.Columns().Add(c); err != nil { return err }
+	}
+	a.withoutModel.replace(nil)
+	return nil
+}
+
+func (a *application) refreshWithout() {
+	if a.store.DB == nil {
+		a.withoutStatus.SetText("Нет подключения к SQL Server")
+		return
+	}
+	ctx, cancel := core.QueryContext()
+	defer cancel()
+	result, err := a.store.ListUnconfigured(ctx, a.withoutSearch.Text())
+	if err != nil {
+		a.warn("Договоры без параметров", err)
+		a.withoutStatus.SetText("Ошибка получения списка")
+		return
+	}
+	if err := a.applyUnconfiguredColumns(result.Columns); err != nil {
+		a.warn("Колонки договоров без параметров", err)
+		return
+	}
+	core.SortListItems(result.Items, a.withoutSortField, a.withoutSortDescending)
+	a.withoutModel.replace(result.Items)
+	a.withoutStatus.SetText(fmt.Sprintf("Договоров без параметров: %d", len(result.Items)))
+}
+
+func (a *application) sortWithoutByColumn(index int) {
+	if index < 0 || index >= len(a.withoutModel.columns) { return }
+	field := a.withoutModel.columns[index].Field
+	if a.withoutSortField == field { a.withoutSortDescending = !a.withoutSortDescending
+	} else { a.withoutSortField, a.withoutSortDescending = field, false }
+	core.SortListItems(a.withoutModel.items, a.withoutSortField, a.withoutSortDescending)
+	a.withoutModel.PublishRowsReset()
+}
+
+func (a *application) addFromWithout() {
+	if a.store.DB == nil {
+		a.warn("Подключение", errors.New("сначала настройте подключение к SQL Server"))
+		return
+	}
+	idx := a.withoutTable.CurrentIndex()
+	if idx < 0 || idx >= len(a.withoutModel.items) {
+		walk.MsgBox(a.win, "Выбор договора", "Выберите договор без параметров.", walk.MsgBoxIconInformation)
+		return
+	}
+	id := a.withoutModel.items[idx].ID
+	r := core.Record{
+		ContractID: id, Period: 1, StartDay: 1, StartMonth: 1,
+		DocumentsCode: 99, PaymentCode: 99, DisconnectCode: 99, Amount: "0.0000",
+	}
+	// Contract is preselected and locked for this specific agreement.
+	if a.editWithContract(r, false, true) { a.refreshBoth() }
 }
 
 func intText(n int) string { return strconv.Itoa(n) }
