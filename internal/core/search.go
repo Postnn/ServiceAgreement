@@ -8,7 +8,7 @@ import (
 )
 
 // BuildListSearchQuery applies exactly the same word-based search to both
-// lists. The configured SQL must be a SELECT suitable for a derived table,
+// lists. The configured SQL may start with SELECT or ;WITH / WITH (CTE),
 // project ContractID and SearchText, and must not apply TOP before searching.
 // Each search word is a named SQL parameter: user input is never interpolated
 // into SQL source. The limit is applied only AFTER the word predicates.
@@ -23,10 +23,20 @@ func BuildListSearchQuery(baseSQL, search string, limit int) (string, []any, err
     if limit < 1 {
         return "", nil, fmt.Errorf("некорректный лимит списка: %d", limit)
     }
-    // TOP within the source query would truncate the candidates BEFORE the
-    // outer word filter. Fail instead of silently missing agreements.
-    if startsWithSelectTop(base) {
-        return "", nil, fmt.Errorf("исходный SQL содержит TOP: ограничение должно применяться после поиска. Удалите TOP из list_sql / without_parameters_sql")
+    // SQL Server CTEs must be declared before the generated outer SELECT.
+    // Never place a leading ;WITH inside FROM (...).
+    ctePrefix, finalSelect, err := splitLeadingCTE(base)
+    if err != nil {
+        return "", nil, fmt.Errorf("ошибка в CTE исходного списка: %w", err)
+    }
+    // TOP within the final SELECT truncates candidates BEFORE word filtering.
+    // TOP/ORDER BY inside a CTE body is legal and does not pre-limit the
+    // final SELECT, so only the last SELECT is checked here.
+    if startsWithSelectTop(finalSelect) {
+        return "", nil, fmt.Errorf("итоговый SELECT содержит TOP: ограничение должно применяться после поиска. Удалите TOP из итогового SELECT списка")
+    }
+    if hasTopLevelOrderBy(finalSelect) {
+        return "", nil, fmt.Errorf("итоговый SELECT содержит ORDER BY: сортировка должна выполняться внешним запросом по ContractID. Удалите завершающий ORDER BY")
     }
     words := strings.Fields(search)
     // SQL Server permits at most 2100 query parameters per statement.
@@ -35,8 +45,14 @@ func BuildListSearchQuery(baseSQL, search string, limit int) (string, []any, err
     }
 
     var query strings.Builder
+    if ctePrefix != "" {
+        query.WriteString(ctePrefix)
+        if !strings.HasSuffix(ctePrefix, "\n") && !strings.HasSuffix(ctePrefix, "\r") {
+            query.WriteByte('\n')
+        }
+    }
     query.WriteString("SELECT TOP (@limit) [Source].*\nFROM (\n")
-    query.WriteString(base)
+    query.WriteString(finalSelect)
     query.WriteString("\n) AS [Source]")
     args := make([]any, 0, len(words)+2)
     args = append(args, sql.Named("limit", limit))
@@ -56,14 +72,28 @@ func BuildListSearchQuery(baseSQL, search string, limit int) (string, []any, err
 }
 
 func startsWithSelectTop(s string) bool {
-    // Only the unambiguously identifiable legacy TOP prefix is rejected.
-    // Complex user SQL remains unchanged, and SQL Server validates it.
-    fields := strings.Fields(strings.ToUpper(s))
-    if len(fields) < 2 || fields[0] != "SELECT" { return false }
-    if fields[1] == "DISTINCT" && len(fields) > 2 {
-        return fields[2] == "TOP" || strings.HasPrefix(fields[2], "TOP(")
+    // Handle comments between SELECT / DISTINCT / TOP, as well as TOP(10).
+    tokens := sqlTokens(s)
+    next := func(i int) int {
+        for i < len(tokens) &&
+            (tokens[i].kind == tokenCommentLine || tokens[i].kind == tokenCommentBlock) {
+            i++
+        }
+        return i
     }
-    return fields[1] == "TOP" || strings.HasPrefix(fields[1], "TOP(")
+    i := next(0)
+    if i >= len(tokens) || tokens[i].kind != tokenWord ||
+        !strings.EqualFold(tokens[i].value, "SELECT") {
+        return false
+    }
+    i = next(i + 1)
+    if i < len(tokens) && tokens[i].kind == tokenWord &&
+        (strings.EqualFold(tokens[i].value, "DISTINCT") ||
+            strings.EqualFold(tokens[i].value, "ALL")) {
+        i = next(i + 1)
+    }
+    return i < len(tokens) && tokens[i].kind == tokenWord &&
+        strings.EqualFold(tokens[i].value, "TOP")
 }
 
 func escapeSearchLikeWord(word string) string {
