@@ -78,7 +78,8 @@ func BuildListSearchQuery(baseSQL, search string, limit int, orderSpec ...string
         query.WriteString(" + N'%' ESCAPE N'~')")
         args = append(args, sql.Named(name, escapeSearchLikeWord(word)))
     }
-    query.WriteString("\nORDER BY ")\n    query.WriteString(compiledOrder)
+    query.WriteString("\nORDER BY ")
+    query.WriteString(compiledOrder)
     return query.String(), args, nil
 }
 
