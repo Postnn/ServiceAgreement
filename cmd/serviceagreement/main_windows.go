@@ -80,6 +80,19 @@ func run() error {
 		MinSize: Size{Width: 850, Height: 490}, Size: Size{Width: 1370, Height: 680},
 		Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}, Spacing: 8},
 		Children: []Widget{
+			// Main-window settings are always accessible at the upper-right,
+			// independent of the currently selected agreements tab.
+			Composite{Layout: HBox{MarginsZero: true, SpacingZero: true}, Children: []Widget{
+				HSpacer{},
+				PushButton{
+					Name: "settingsGear", Text: "⚙",
+					ToolTipText: "Настройки SQL и колонок",
+					Font: Font{Family: "Segoe UI Symbol", PointSize: 16},
+					MinSize: Size{Width: 36, Height: 34},
+					MaxSize: Size{Width: 36, Height: 34},
+					OnClicked: app.openSettings,
+				},
+			}},
 			TabWidget{Pages: []TabPage{
 				{
 					Title: "Договоры с параметрами",
@@ -131,10 +144,6 @@ func run() error {
 					},
 				},
 			}},
-			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-				PushButton{Text: "Настройки SQL и колонок…", OnClicked: app.openSettings},
-			}},
-
 		},
 	}.Create()
 	if err != nil {
