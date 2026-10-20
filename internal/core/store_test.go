@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -36,28 +37,28 @@ func (c *fakeSQLConn) record(query string, args []driver.NamedValue) {
 }
 func (c *fakeSQLConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	c.record(query, args)
-	switch query {
-	case "query_list", "query_search":
+	switch {
+	case strings.Contains(query, "query_list"):
 		return &fakeSQLRows{
-			names: []string{"ContractID", "CustomColumn", "ServicePeriod", "AutoPay", "PaymentCode", "PaymentText", "SortByHidden"},
-			rows:  [][]driver.Value{{int64(13068), []byte("Номер контракта"), int64(3), int64(1), int64(306), []byte("Оплата: до 6 мая"), int64(12)}},
+			names: []string{"ContractID", "CustomColumn", "ServicePeriod", "AutoPay", "PaymentCode", "PaymentText", "SortByHidden", "SearchText"},
+			rows:  [][]driver.Value{{int64(13068), []byte("Номер контракта"), int64(3), int64(1), int64(306), []byte("Оплата: до 6 мая"), int64(12), []byte("13068 Номер контракта")}},
 		}, nil
-	case "query_unconfigured":
+	case strings.Contains(query, "FROM (\nquery_unconfigured\n)"):
 		return &fakeSQLRows{
-			names: []string{"ContractID", "ContractName", "DateSigned", "CustomExtra"},
+			names: []string{"ContractID", "ContractName", "DateSigned", "CustomExtra", "SearchText"},
 			rows: [][]driver.Value{
-				{int64(1206), "Договор №1206", "2026-03-07", []byte("Поставщик")},
-				{int64(1307), "Договор №1307", "2026-04-11", []byte("Клиент")},
+				{int64(1206), "Договор №1206", "2026-03-07", []byte("Поставщик"), "1206 Договор №1206"},
+				{int64(1307), "Договор №1307", "2026-04-11", []byte("Клиент"), "1307 Договор №1307"},
 			},
 		}, nil
-	case "query_unconfigured_empty":
-		return &fakeSQLRows{names: []string{"ContractID", "ContractName", "SomethingElse"}}, nil
-	case "query_unconfigured_bad":
+	case strings.Contains(query, "query_unconfigured_empty"):
+		return &fakeSQLRows{names: []string{"ContractID", "ContractName", "SomethingElse", "SearchText"}}, nil
+	case strings.Contains(query, "query_unconfigured_bad"):
 		return &fakeSQLRows{names: []string{"SomeOtherID", "ContractName"}}, nil
-	case "get_record":
+	case query == "get_record":
 		return &fakeSQLRows{names: []string{"id", "type", "period", "auto", "amount", "day", "month", "docs", "pay", "off", "notify"},
 			rows: [][]driver.Value{{int64(13068), int64(23), int64(3), int64(1), "300.0000", int64(7), int64(1), int64(-6), int64(306), int64(320), int64(0)}}}, nil
-	case "lookup_values":
+	case query == "lookup_values":
 		return &fakeSQLRows{names: []string{"id", "label"}, rows: [][]driver.Value{{int64(13068), "Контракт 13068"}}}, nil
 	}
 	return nil, errors.New("unexpected query: " + query)
@@ -88,7 +89,6 @@ func TestStoreUsesConfiguredQueriesAndDynamicColumns(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.ConnectionString = "test"
 	cfg.ListSQL = "query_list"
-	cfg.SearchSQL = "query_search"
 	cfg.ContractsSQL = "lookup_values"
 	cfg.GetSQL = "get_record"
 	cfg.InsertSQL = "insert_record"
@@ -105,7 +105,7 @@ func TestStoreUsesConfiguredQueriesAndDynamicColumns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Query != "query_list" || state.Args["search"] != "" || state.Args["limit"] != int64(cfg.ListLimit) && state.Args["limit"] != cfg.ListLimit {
+	if !strings.Contains(state.Query, "FROM (\nquery_list\n)") || state.Args["limit"] != int64(cfg.ListLimit) && state.Args["limit"] != cfg.ListLimit {
 		t.Fatalf("list %s: %v", state.Query, state.Args)
 	}
 	if len(rows) != 1 || rows[0].ID != 13068 || rows[0].Field("customcolumn") != "Номер контракта" {
@@ -118,7 +118,8 @@ func TestStoreUsesConfiguredQueriesAndDynamicColumns(t *testing.T) {
 		t.Fatal("unexpected derived/virtual column added", rows[0].Values)
 	}
 	_, err = store.List(ctx, "кот")
-	if err != nil || state.Query != "query_search" || state.Args["search"] != "кот" {
+	if err != nil || !strings.Contains(state.Query, "FROM (\nquery_list\n)") || state.Args["SearchText1"] != "кот" ||
+        !strings.Contains(state.Query, "@SearchText1") {
 		t.Fatalf("search %s args %v err %v", state.Query, state.Args, err)
 	}
 	opts, err := store.Lookup(ctx, cfg.ContractsSQL, "договор", 123)
@@ -161,15 +162,15 @@ func TestListColumnsMustExist(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ValidateResultColumns([]string{"ContractID", "CustomColumn"}, cfg.ListColumns); err == nil {
+	if _, err := ValidateResultColumns([]string{"ContractID", "CustomColumn", "SearchText"}, cfg.ListColumns); err == nil {
 		t.Fatal("accepted a field not returned by SQL")
 	}
 	cfg.ListColumns[1].Field = "CustomColumn"
-	if _, err := ValidateResultColumns([]string{"ContractID", "CustomColumn"}, cfg.ListColumns); err == nil {
+	if _, err := ValidateResultColumns([]string{"ContractID", "CustomColumn", "SearchText"}, cfg.ListColumns); err == nil {
 		t.Fatal("accepted a missing sortField")
 	}
 	cfg.ListColumns[1].SortField = "ContractID"
-	if _, err := ValidateResultColumns([]string{"ContractID", "CustomColumn"}, cfg.ListColumns); err != nil {
+	if _, err := ValidateResultColumns([]string{"ContractID", "CustomColumn", "SearchText"}, cfg.ListColumns); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -187,11 +188,11 @@ func TestUnconfiguredContractsUseConfiguredSQLAndDisplayEveryColumn(t *testing.T
 	store := Store{DB: db, Config: cfg}
 	result, err := store.ListUnconfigured(context.Background(), "  1206 ")
 	if err != nil { t.Fatal(err) }
-	if state.Query != "query_unconfigured" || state.Args["search"] != "1206" ||
+	if !strings.Contains(state.Query, "FROM (\nquery_unconfigured\n)") || state.Args["SearchText1"] != "1206" ||
 		state.Args["limit"] != int64(cfg.ListLimit) && state.Args["limit"] != cfg.ListLimit {
 		t.Fatalf("wrong configured SQL or named search parameters: %s, %v", state.Query, state.Args)
 	}
-	if len(result.Columns) != 4 || len(result.Items) != 2 || result.Items[0].ID != 1206 ||
+	if len(result.Columns) != 5 || len(result.Items) != 2 || result.Items[0].ID != 1206 ||
 		result.Items[0].Field("CustomExtra") != "Поставщик" {
 		t.Fatalf("SQL columns not exposed: %+v", result)
 	}
@@ -208,7 +209,7 @@ func TestUnconfiguredContractsUseConfiguredSQLAndDisplayEveryColumn(t *testing.T
 	cfg.WithoutParametersSQL = "query_unconfigured_empty"
 	store.Config = cfg
 	empty, err := store.ListUnconfigured(context.Background(), "")
-	if err != nil || len(empty.Items) != 0 || len(empty.Columns) != 3 {
+	if err != nil || len(empty.Items) != 0 || len(empty.Columns) != 4 {
 		t.Fatalf("empty SQL result must still define columns: %+v %v", empty, err)
 	}
 	cfg.WithoutParametersSQL = "query_unconfigured_bad"

@@ -14,8 +14,8 @@ func TestDefaultConfigurationAndColumns(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if len(SQLFields) != 9 {
-		t.Fatalf("want 9 editable SQL queries; got %d", len(SQLFields))
+	if len(SQLFields) != 8 {
+		t.Fatalf("want 8 editable SQL queries; got %d", len(SQLFields))
 	}
 	for i, field := range SQLFields {
 		if ptr := c.SQLAt(i); ptr == nil || strings.TrimSpace(*ptr) == "" {
@@ -72,7 +72,7 @@ func TestSaveLoadConfigAndBackwardCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if oldConfig.ListSQL != "SELECT 1" || oldConfig.SearchSQL == "" || oldConfig.WithoutParametersSQL == "" || oldConfig.GetSQL == "" || len(oldConfig.ListColumns) == 0 {
+	if oldConfig.ListSQL != "SELECT 1" || oldConfig.WithoutParametersSQL == "" || oldConfig.GetSQL == "" || len(oldConfig.ListColumns) == 0 {
 		t.Fatalf("backwards migration: %+v", oldConfig)
 	}
 }
@@ -133,7 +133,7 @@ func TestDefaultQueriesProjectAllDisplayedColumns(t *testing.T) {
 	for _, col := range cfg.ListColumns {
 		for _, field := range []string{col.Field, col.SortField} {
 			// The default SQL must project the aliases directly, never via Go.
-			if !strings.Contains(cfg.ListSQL, " AS "+field) || !strings.Contains(cfg.SearchSQL, " AS "+field) {
+			if !strings.Contains(cfg.ListSQL, " AS "+field) {
 				t.Fatalf("default SQL does not project %q", field)
 			}
 		}
@@ -144,12 +144,12 @@ func TestUnconfiguredSQLSettings(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.ConnectionString = "sqlserver://test"
 	if !strings.Contains(cfg.WithoutParametersSQL, "NOT EXISTS") ||
-		!strings.Contains(cfg.WithoutParametersSQL, "@search") ||
+		!strings.Contains(cfg.WithoutParametersSQL, " AS SearchText") ||
 		!strings.Contains(cfg.WithoutParametersSQL, "ContractID") {
 		t.Fatalf("default unconfigured SQL is incomplete: %s", cfg.WithoutParametersSQL)
 	}
-	if len(SQLFields) != 9 || SQLFields[2].Key != "without_parameters_sql" ||
-		cfg.SQLAt(2) == nil || *cfg.SQLAt(2) != cfg.WithoutParametersSQL {
+	if len(SQLFields) != 8 || SQLFields[1].Key != "without_parameters_sql" ||
+		cfg.SQLAt(1) == nil || *cfg.SQLAt(1) != cfg.WithoutParametersSQL {
 		t.Fatal("new query must appear as a separate editable SQL setting")
 	}
 	cfg.WithoutParametersSQL = ""
@@ -167,59 +167,76 @@ func TestUnconfiguredSQLSettings(t *testing.T) {
 	}
 }
 
+
 func TestAgreementNameQueriesAndFactoryMigration(t *testing.T) {
     cfg := DefaultConfig()
     cfg.ConnectionString = "sqlserver://example?database=db"
     if !strings.Contains(cfg.WithoutParametersSQL, "d.[КодДокумента] AS ContractID") ||
         !strings.Contains(cfg.WithoutParametersSQL, "d.[Договор]) AS [Договор]") ||
-        strings.Count(cfg.WithoutParametersSQL, "d.[Договор]") < 2 ||
-        !strings.Contains(cfg.WithoutParametersSQL, "NOT EXISTS") {
-        t.Fatalf("second list must return contract code/name and search by both: %s", cfg.WithoutParametersSQL)
+        !strings.Contains(cfg.WithoutParametersSQL, " AS SearchText") ||
+        !strings.Contains(cfg.WithoutParametersSQL, "NOT EXISTS") ||
+        strings.Contains(cfg.WithoutParametersSQL, "TOP (@limit)") {
+        t.Fatalf("invalid second list SQL: %s", cfg.WithoutParametersSQL)
     }
     if !strings.Contains(cfg.ContractsSQL, "d.[Договор]) AS ContractLabel") ||
-       !strings.Contains(cfg.ContractsSQL, "@selected") ||
-       !strings.Contains(cfg.ContractsSQL, "d.[Договор]) LIKE") {
-       t.Fatalf("contract dropdown must show/search true contract name: %s", cfg.ContractsSQL)
+        !strings.Contains(cfg.ContractsSQL, "@selected") ||
+        !strings.Contains(cfg.ContractsSQL, "d.[Договор]) LIKE") {
+        t.Fatalf("invalid contract lookup SQL: %s", cfg.ContractsSQL)
     }
     if !strings.Contains(cfg.ListSQL, "d.[Договор]) AS AgreementLabel") ||
-       !strings.Contains(cfg.ListSQL, "LEFT JOIN dbo.[ДокументыДанные] AS d") ||
-       !strings.Contains(cfg.SearchSQL, "d.[Договор]) LIKE") {
-       t.Fatal("configured list must show and search the name")
+        !strings.Contains(cfg.ListSQL, "LEFT JOIN dbo.[ДокументыДанные] AS d") ||
+        !strings.Contains(cfg.ListSQL, " AS SearchText") ||
+        strings.Contains(cfg.ListSQL, "TOP (@limit)") {
+        t.Fatal("default list must show title, project SearchText, and not pre-limit")
     }
     path := filepath.Join(t.TempDir(), "config.json")
-    old := cfg
-    old.WithoutParametersSQL = legacyWithoutParametersSQL
-    old.ContractsSQL = legacyContractsSQL
-    oldProjection := strings.Replace(listProjection,
-        "CONVERT(nvarchar(max), d.[Договор]) AS AgreementLabel,",
-        "CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) AS AgreementLabel,", 1)
-    oldProjection = strings.Replace(oldProjection,
-        "\nLEFT JOIN dbo.[ДокументыДанные] AS d\n    ON d.[КодДокумента] = t.[КодДокументаДоговораОказанияУслуг]", "", 1)
-    old.ListSQL = oldProjection + "\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC"
-    old.SearchSQL = oldProjection + "\nWHERE CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%'" + "\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC"
-    if err := SaveConfig(path, old); err != nil {t.Fatal(err)}
-    newcfg, err := LoadConfig(path)
-    if err != nil {t.Fatal(err)}
-    if newcfg.WithoutParametersSQL != cfg.WithoutParametersSQL || 
-       newcfg.ContractsSQL != cfg.ContractsSQL ||
-       newcfg.ListSQL != cfg.ListSQL || newcfg.SearchSQL != cfg.SearchSQL {
-       t.Fatal("old untouched factory queries were not migrated")
+    previous := cfg
+    previous.WithoutParametersSQL = legacyNamedWithoutParametersSQL
+    previous.ContractsSQL = legacyContractsSQL
+    legacyList := strings.Replace(listProjection, "SELECT\n", "SELECT TOP (@limit)\n", 1)
+    legacyList = strings.Replace(legacyList,
+        "    CONCAT(CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]),\n        N' ', COALESCE(CONVERT(nvarchar(max), d.[Договор]), N'')) AS SearchText,\n", "", 1)
+    previous.ListSQL = legacyList + "\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC"
+    if err := SaveConfig(path, previous); err != nil { t.Fatal(err) }
+
+    // Simulate old JSON with separate search_sql. LoadConfig must discard
+    // it without losing other saved configuration or silently rewriting disk.
+    original, err := os.ReadFile(path)
+    if err != nil { t.Fatal(err) }
+    var legacy map[string]json.RawMessage
+    if err := json.Unmarshal(original, &legacy); err != nil { t.Fatal(err) }
+    legacy["search_sql"] = json.RawMessage(`"SELECT legacy search SQL"`)
+    oldJSON, err := json.MarshalIndent(legacy, "", "  ")
+    if err != nil { t.Fatal(err) }
+    if err := os.WriteFile(path, oldJSON, 0600); err != nil { t.Fatal(err) }
+
+    migrated, err := LoadConfig(path)
+    if err != nil { t.Fatal(err) }
+    if migrated.WithoutParametersSQL != cfg.WithoutParametersSQL ||
+        migrated.ContractsSQL != cfg.ContractsSQL ||
+        migrated.ListSQL != cfg.ListSQL {
+        t.Fatalf("factory SQL not migrated: %+v", migrated)
     }
     raw, err := os.ReadFile(path)
-    if err != nil || !strings.Contains(string(raw), "CONVERT(nvarchar(30),d.[КодДокумента]) AS ContractLabel") {
-       t.Fatal("migration must not rewrite disk config without Save")
+    if err != nil || !strings.Contains(string(raw), "search_sql") {
+        t.Fatal("LoadConfig unexpectedly modified the disk config")
     }
-    custom := cfg
-    custom.WithoutParametersSQL = "SELECT ContractID, Title FROM CustomView WHERE Title LIKE @search"
-    custom.ContractsSQL = "SELECT Code, Name FROM CustomLookup"
-    custom.ListSQL = "SELECT ContractID FROM CustomList"
-    custom.SearchSQL = "SELECT ContractID FROM CustomList WHERE Title LIKE @search"
-    if err := SaveConfig(path, custom); err != nil {t.Fatal(err)}
-    loaded, err := LoadConfig(path)
-    if err != nil {t.Fatal(err)}
-    if loaded.WithoutParametersSQL != custom.WithoutParametersSQL ||
-       loaded.ContractsSQL != custom.ContractsSQL ||
-       loaded.ListSQL != custom.ListSQL || loaded.SearchSQL != custom.SearchSQL {
-        t.Fatal("migration overwrote user SQL")
+    if err := SaveConfig(path, migrated); err != nil { t.Fatal(err) }
+    raw, err = os.ReadFile(path)
+    if err != nil || strings.Contains(string(raw), `"search_sql"`) {
+        t.Fatal("SaveConfig must not write deprecated search_sql")
+    }
+
+    customized := cfg
+    customized.WithoutParametersSQL = "SELECT ContractID, Title, SearchText FROM CustomView"
+    customized.ContractsSQL = "SELECT Code, Name FROM CustomLookup"
+    customized.ListSQL = "SELECT ContractID, SearchText FROM MyUserTable"
+    if err := SaveConfig(path, customized); err != nil { t.Fatal(err) }
+    actual, err := LoadConfig(path)
+    if err != nil { t.Fatal(err) }
+    if actual.WithoutParametersSQL != customized.WithoutParametersSQL ||
+        actual.ContractsSQL != customized.ContractsSQL ||
+        actual.ListSQL != customized.ListSQL {
+        t.Fatal("custom SQL was overwritten")
     }
 }

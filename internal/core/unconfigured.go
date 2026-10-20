@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -24,7 +23,7 @@ func UnconfiguredColumns(names []string) []ListColumn {
 		width := 170
 		if strings.EqualFold(name, "ContractID") {
 			width = 120
-		} else if strings.EqualFold(name, "ContractName") {
+		} else if strings.EqualFold(name, "ContractName") || strings.EqualFold(name, "Договор") {
 			width = 350
 		}
 		columns = append(columns, ListColumn{
@@ -37,18 +36,17 @@ func UnconfiguredColumns(names []string) []ListColumn {
 
 // ListUnconfigured executes the single configured SQL query for both the
 // unfiltered and filtered "contracts without parameters" views.
-// The query must accept @limit, @search and return a positive ContractID.
+// The configured SELECT projects positive ContractID and SearchText; the
+// same outer word filter is applied as for the first list.
 func (s Store) ListUnconfigured(ctx context.Context, search string) (UnconfiguredResult, error) {
 	if s.DB == nil {
 		return UnconfiguredResult{}, fmt.Errorf("не задано соединение с SQL Server")
 	}
-	query := strings.TrimSpace(s.Config.WithoutParametersSQL)
-	if query == "" {
-		return UnconfiguredResult{}, fmt.Errorf("в настройках не задан without_parameters_sql")
+	query, args, err := BuildListSearchQuery(s.Config.WithoutParametersSQL, search, s.Config.ListLimit)
+	if err != nil {
+		return UnconfiguredResult{}, fmt.Errorf("without_parameters_sql: %w", err)
 	}
-	rows, err := s.DB.QueryContext(ctx, query,
-		sql.Named("limit", s.Config.ListLimit),
-		sql.Named("search", strings.TrimSpace(search)))
+	rows, err := s.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return UnconfiguredResult{}, fmt.Errorf("договоры без параметров: %w", err)
 	}

@@ -36,6 +36,9 @@ func columnNames(names []string) (map[string]string, error) {
 	if _, exists := known["contractid"]; !exists {
 		return nil, fmt.Errorf("SQL-список должен возвращать колонку ContractID — ключ выбранного договора")
 	}
+	if _, exists := known["searchtext"]; !exists {
+		return nil, fmt.Errorf("SQL-список должен возвращать обязательную колонку SearchText для поиска")
+	}
 	if len(names) > 40 {
 		return nil, fmt.Errorf("SQL возвращает %d колонок, максимально допустимо 40", len(names))
 	}
@@ -94,65 +97,24 @@ func ReconcileListColumns(existing []ListColumn, names []string) (ColumnSync, er
 	return result, nil
 }
 
-// QueryListSchema retrieves SELECT result metadata from SQL Server, even if no
-// records match. Both queries must expose exactly the same set of aliases, so
-// no column disappears when the user switches between list and search.
+// QueryListSchema reads metadata only from list_sql. The word search is an
+// outer SELECT, so no secondary search_sql or cross-query comparison exists.
 func QueryListSchema(ctx context.Context, db *sql.DB, cfg Config) ([]string, error) {
-	fetch := func(label, query, search string) ([]string, map[string]string, error) {
-		rows, err := db.QueryContext(ctx, query,
-			sql.Named("limit", 1), sql.Named("search", search))
-		if err != nil {
-			return nil, nil, fmt.Errorf("%s: %w", label, err)
-		}
-		defer rows.Close()
-		names, err := rows.Columns()
-		if err != nil {
-			return nil, nil, fmt.Errorf("%s: %w", label, err)
-		}
-		known, err := columnNames(names)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%s: %w", label, err)
-		}
-		return names, known, nil
-	}
-	list, listNames, err := fetch("list_sql", cfg.ListSQL, "")
-	if err != nil {
-		return nil, err
-	}
-	_, searchNames, err := fetch("search_sql", cfg.SearchSQL, "__ServiceAgreement_schema_check__")
-	if err != nil {
-		return nil, err
-	}
-	var onlyList, onlySearch []string
-	for key, name := range listNames {
-		if _, ok := searchNames[key]; !ok {
-			onlyList = append(onlyList, name)
-		}
-	}
-	for key, name := range searchNames {
-		if _, ok := listNames[key]; !ok {
-			onlySearch = append(onlySearch, name)
-		}
-	}
-	if len(onlyList) > 0 || len(onlySearch) > 0 {
-		// Put differences in SELECT order rather than random map iteration.
-		orderedList, orderedSearch := make([]string, 0), make([]string, 0)
-		for _, name := range list {
-			if !containsName(searchNames, name) {
-				orderedList = append(orderedList, name)
-			}
-		}
-		// Sorting the second list matters only for a consistent error message.
-		// SQL may use different column ordering between list and search.
-		for _, name := range onlySearch {
-			orderedSearch = append(orderedSearch, name)
-		}
-		return nil, fmt.Errorf("list_sql и search_sql возвращают разные поля. Только в list_sql: %s; только в search_sql: %s. Приведите SELECT к одинаковому составу колонок", strings.Join(orderedList, ", "), strings.Join(orderedSearch, ", "))
-	}
-	return list, nil
-}
-
-func containsName(known map[string]string, field string) bool {
-	_, ok := known[strings.ToLower(strings.TrimSpace(field))]
-	return ok
+    query, args, err := BuildListSearchQuery(cfg.ListSQL, "", 1)
+    if err != nil {
+        return nil, fmt.Errorf("list_sql: %w", err)
+    }
+    rows, err := db.QueryContext(ctx, query, args...)
+    if err != nil {
+        return nil, fmt.Errorf("list_sql: %w", err)
+    }
+    defer rows.Close()
+    names, err := rows.Columns()
+    if err != nil {
+        return nil, fmt.Errorf("list_sql: %w", err)
+    }
+    if _, err := columnNames(names); err != nil {
+        return nil, fmt.Errorf("list_sql: %w", err)
+    }
+    return names, nil
 }

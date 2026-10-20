@@ -77,7 +77,6 @@ type Config struct {
 	ListLimit        int          `json:"list_limit"`
 	LookupLimit      int          `json:"lookup_limit"`
 	ListSQL          string       `json:"list_sql"`
-	SearchSQL        string       `json:"search_sql"`
 	WithoutParametersSQL string `json:"without_parameters_sql"`
 	ListColumns      []ListColumn `json:"list_columns"`
 	ContractsSQL     string       `json:"contracts_sql"`
@@ -88,9 +87,11 @@ type Config struct {
 	DeleteSQL        string       `json:"delete_sql"`
 }
 
-const listProjection = `SELECT TOP (@limit)
+const listProjection = `SELECT
     t.[КодДокументаДоговораОказанияУслуг] AS ContractID,
     CONVERT(nvarchar(max), d.[Договор]) AS AgreementLabel,
+    CONCAT(CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]),
+        N' ', COALESCE(CONVERT(nvarchar(max), d.[Договор]), N'')) AS SearchText,
     t.[ПериодОказанияУслуги] AS ServicePeriod,
     CASE t.[ПериодОказанияУслуги]
          WHEN 1 THEN N'Один месяц (1)'
@@ -134,7 +135,19 @@ LEFT JOIN dbo.[ДокументыДанные] AS d
 // Default candidate list. Adapt dbo.ДокументыДанные to the actual
 // service-agreement type and name schema in the SQL settings. ContractID is
 // required, every other SELECT field is displayed by the application.
-const defaultWithoutParametersSQL = `SELECT TOP (@limit)
+const defaultWithoutParametersSQL = `SELECT
+    d.[КодДокумента] AS ContractID,
+    CONVERT(nvarchar(max), d.[Договор]) AS [Договор],
+    CONCAT(CONVERT(nvarchar(30), d.[КодДокумента]),
+        N' ', COALESCE(CONVERT(nvarchar(max), d.[Договор]), N'')) AS SearchText
+FROM dbo.[ДокументыДанные] AS d
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM dbo.[ДокументыДоговораОказанияУслуг] AS p
+    WHERE p.[КодДокументаДоговораОказанияУслуг] = d.[КодДокумента]
+)`
+
+const legacyNamedWithoutParametersSQL = `SELECT TOP (@limit)
     d.[КодДокумента] AS ContractID,
     CONVERT(nvarchar(max), d.[Договор]) AS [Договор]
 FROM dbo.[ДокументыДанные] AS d
@@ -232,13 +245,7 @@ func DefaultConfig() Config {
 		ConnectionString: "",
 		ListLimit:        200, LookupLimit: 100,
 		WithoutParametersSQL: defaultWithoutParametersSQL,
-		ListSQL: listProjection + `
-ORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC`,
-		SearchSQL: listProjection + `
-WHERE
-    CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%' OR
-    CONVERT(nvarchar(max), d.[Договор]) LIKE N'%' + @search + N'%'
-ORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC`,
+		ListSQL: listProjection,
 		ListColumns: []ListColumn{
 			{Field: "ContractID", Title: "Код договора", Width: 120, Order: 1, SortField: "ContractID", Visible: true},
 			{Field: "AgreementLabel", Title: "Договор", Width: 220, Order: 2, SortField: "ContractID", Visible: true},
@@ -257,6 +264,7 @@ ORDER BY t.[КодДокументаДоговораОказанияУслуг] 
 			{Field: "DocumentsCode", Title: "Получение документов (XDD)", Width: 180, Order: 13, SortField: "DocumentsCode", Visible: false},
 			{Field: "PaymentCode", Title: "Оплата (XDD)", Width: 160, Order: 14, SortField: "PaymentCode", Visible: false},
 			{Field: "DisconnectCode", Title: "Отключение (XDD)", Width: 170, Order: 15, SortField: "DisconnectCode", Visible: false},
+            {Field: "SearchText", Title: "Поисковый текст", Width: 220, Order: 16, SortField: "SearchText", Visible: false},
 		},
 		ContractsSQL: defaultContractsSQL,
 		DocumentTypesSQL: `SELECT TOP (@limit)
@@ -272,7 +280,6 @@ ORDER BY t.[КодТипаДокумента]`,
 // SQLFields is ordered the same way as the configuration editor's query selector.
 var SQLFields = []struct{ Key, Caption string }{
 	{"list_sql", "Список договоров (без фильтра)"},
-	{"search_sql", "Поиск по списку договоров"},
 	{"without_parameters_sql", "Договоры без параметров (с поиском)"},
 	{"contracts_sql", "Поиск и выбор договора"},
 	{"document_types_sql", "Поиск типа документа основания автооплаты"},
@@ -283,27 +290,17 @@ var SQLFields = []struct{ Key, Caption string }{
 }
 
 func (c *Config) SQLAt(i int) *string {
-	switch i {
-	case 0:
-		return &c.ListSQL
-	case 1:
-		return &c.SearchSQL
-	case 2:
-		return &c.WithoutParametersSQL
-	case 3:
-		return &c.ContractsSQL
-	case 4:
-		return &c.DocumentTypesSQL
-	case 5:
-		return &c.GetSQL
-	case 6:
-		return &c.InsertSQL
-	case 7:
-		return &c.UpdateSQL
-	case 8:
-		return &c.DeleteSQL
-	}
-	return nil
+    switch i {
+    case 0: return &c.ListSQL
+    case 1: return &c.WithoutParametersSQL
+    case 2: return &c.ContractsSQL
+    case 3: return &c.DocumentTypesSQL
+    case 4: return &c.GetSQL
+    case 5: return &c.InsertSQL
+    case 6: return &c.UpdateSQL
+    case 7: return &c.DeleteSQL
+    }
+    return nil
 }
 
 func (c Config) Validate() error {
@@ -359,58 +356,79 @@ func ValidateColumns(cols []ListColumn) error {
 // Existing SQL connection and user-edited queries are never overwritten.
 // Replace only byte-identical factory SQL from earlier versions.
 // The updated SQL stays in memory until the user saves settings.
+// Upgrade only exact, untouched factory SQL texts. Never rewrite custom
+// SQL queries, since their SELECT projections and formatting belong to users.
+// Factory queries from previous releases included TOP and ORDER BY and would
+// truncate the candidate set before word filtering if left unchanged.
 func upgradeFactoryAgreementQueries(c *Config) {
-    if c.WithoutParametersSQL == legacyWithoutParametersSQL {
+    if c.WithoutParametersSQL == legacyWithoutParametersSQL ||
+        c.WithoutParametersSQL == legacyNamedWithoutParametersSQL {
         c.WithoutParametersSQL = defaultWithoutParametersSQL
     }
     if c.ContractsSQL == legacyContractsSQL {
         c.ContractsSQL = defaultContractsSQL
     }
-    legacyProjection := strings.Replace(listProjection,
+    // Factory query from the immediately previous release (real title, TOP).
+    previous := strings.Replace(listProjection, "SELECT\n", "SELECT TOP (@limit)\n", 1)
+    previous = strings.Replace(previous, "    CONCAT(CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]),\n        N' ', COALESCE(CONVERT(nvarchar(max), d.[Договор]), N'')) AS SearchText,\n", "", 1)
+    const previousOrder = "\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC"
+    if c.ListSQL == previous + previousOrder {
+        c.ListSQL = listProjection
+    }
+    // Even older factory version projected numeric contract ID as the label.
+    older := strings.Replace(previous,
         "CONVERT(nvarchar(max), d.[Договор]) AS AgreementLabel,",
         "CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) AS AgreementLabel,", 1)
-    legacyProjection = strings.Replace(legacyProjection,
+    older = strings.Replace(older,
         "\nLEFT JOIN dbo.[ДокументыДанные] AS d\n    ON d.[КодДокумента] = t.[КодДокументаДоговораОказанияУслуг]", "", 1)
-    const ordering = "\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC"
-    if c.ListSQL == legacyProjection + ordering {
-        c.ListSQL = listProjection + ordering
-    }
-    oldSearch := legacyProjection + "\nWHERE CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%'" + ordering
-    if c.SearchSQL == oldSearch {
-        c.SearchSQL = listProjection + "\nWHERE\n    CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%' OR\n    CONVERT(nvarchar(max), d.[Договор]) LIKE N'%' + @search + N'%'" + ordering
+    if c.ListSQL == older + previousOrder {
+        c.ListSQL = listProjection
     }
 }
 
+// LoadConfig drops only the deprecated search_sql key from old JSON files.
+// Other unknown keys still raise an error. SaveConfig never writes search_sql.
 func LoadConfig(path string) (Config, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return Config{}, fmt.Errorf("открыть конфигурацию: %w", err)
-	}
-	defer f.Close()
-	c := DefaultConfig()
-	dec := json.NewDecoder(f)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&c); err != nil {
-		return Config{}, fmt.Errorf("формат конфигурации: %w", err)
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return Config{}, errors.New("в config.json более одного JSON-объекта")
-		}
-		return Config{}, fmt.Errorf("лишние данные после JSON: %w", err)
-	}
-	upgradeFactoryAgreementQueries(&c)
-	// Column settings added in v4; old columns were always visible and in array order.
-	for i := range c.ListColumns {
-		if c.ListColumns[i].Order == -1 {
-			c.ListColumns[i].Order = i + 1
-		}
-	}
-	if err := c.Validate(); err != nil {
-		return Config{}, err
-	}
-	return c, nil
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return Config{}, fmt.Errorf("открыть конфигурацию: %w", err)
+    }
+    decoder := json.NewDecoder(strings.NewReader(string(data)))
+    var fields map[string]json.RawMessage
+    if err := decoder.Decode(&fields); err != nil {
+        return Config{}, fmt.Errorf("формат конфигурации: %w", err)
+    }
+    if fields == nil {
+        return Config{}, errors.New("конфигурация должна быть JSON-объектом")
+    }
+    var extra any
+    if err := decoder.Decode(&extra); err != io.EOF {
+        if err == nil {
+            return Config{}, errors.New("в config.json более одного JSON-объекта")
+        }
+        return Config{}, fmt.Errorf("лишние данные после JSON: %w", err)
+    }
+    delete(fields, "search_sql")
+    normalized, err := json.Marshal(fields)
+    if err != nil {
+        return Config{}, err
+    }
+    c := DefaultConfig()
+    strict := json.NewDecoder(strings.NewReader(string(normalized)))
+    strict.DisallowUnknownFields()
+    if err := strict.Decode(&c); err != nil {
+        return Config{}, fmt.Errorf("формат конфигурации: %w", err)
+    }
+    upgradeFactoryAgreementQueries(&c)
+    for i := range c.ListColumns {
+        if c.ListColumns[i].Order == -1 {
+            c.ListColumns[i].Order = i + 1
+        }
+    }
+    if err := c.Validate(); err != nil {
+        return Config{}, err
+    }
+    return c, nil
 }
 
 // SaveConfig stores a readable UTF-8 JSON file next to the executable.

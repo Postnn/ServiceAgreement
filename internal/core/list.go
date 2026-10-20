@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -63,9 +62,12 @@ func ValidateResultColumns(names []string, columns []ListColumn) (int, error) {
 	if idColumn < 0 {
 		return -1, fmt.Errorf("SQL списка должен возвращать ContractID (даже если колонка скрыта)")
 	}
+	if !known["searchtext"] {
+		return -1, fmt.Errorf("SQL списка должен возвращать обязательное поле SearchText для поиска")
+	}
 	for _, col := range columns {
 		if !known[strings.ToLower(strings.TrimSpace(col.Field))] {
-			return -1, fmt.Errorf("поле %q из list_columns отсутствует в SQL результате; добавьте его в list_sql и search_sql либо уберите из list_columns", col.Field)
+			return -1, fmt.Errorf("поле %q из list_columns отсутствует в SQL результате; добавьте его в list_sql либо уберите из list_columns", col.Field)
 		}
 		if !known[strings.ToLower(strings.TrimSpace(col.SortField))] {
 			return -1, fmt.Errorf("поле сортировки %q для колонки %q отсутствует в SQL результате", col.SortField, col.Field)
@@ -75,15 +77,14 @@ func ValidateResultColumns(names []string, columns []ListColumn) (int, error) {
 }
 
 func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
-	search = strings.TrimSpace(search)
-	query := s.Config.ListSQL
-	if search != "" {
-		query = s.Config.SearchSQL
-	}
-	rows, err := s.DB.QueryContext(ctx, query, sql.Named("search", search), sql.Named("limit", s.Config.ListLimit))
-	if err != nil {
-		return nil, fmt.Errorf("список договоров: %w", err)
-	}
+    query, args, err := BuildListSearchQuery(s.Config.ListSQL, search, s.Config.ListLimit)
+    if err != nil {
+        return nil, fmt.Errorf("список договоров с параметрами: %w", err)
+    }
+    rows, err := s.DB.QueryContext(ctx, query, args...)
+    if err != nil {
+        return nil, fmt.Errorf("список договоров: %w", err)
+    }
 	defer rows.Close()
 	names, err := rows.Columns()
 	if err != nil {
