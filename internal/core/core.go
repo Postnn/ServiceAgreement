@@ -5,82 +5,20 @@ package core
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const target = "dbo.ДокументыДоговораОказанияУслуг"
-
-// Config is intentionally limited to connection details and read-only SQL queries.
-// Queries must return columns in the documented order and use named parameters.
-type Config struct {
-	ConnectionString string `json:"connection_string"`
-	ListSQL          string `json:"list_sql"`
-	ContractsSQL     string `json:"contracts_sql"`
-	DocumentTypesSQL string `json:"document_types_sql"`
-	ListLimit        int    `json:"list_limit"`
-	LookupLimit      int    `json:"lookup_limit"`
-}
-
-func LoadConfig(path string) (Config, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return Config{}, fmt.Errorf("открыть конфигурацию: %w", err)
-	}
-	defer f.Close()
-	var c Config
-	dec := json.NewDecoder(f)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&c); err != nil {
-		return Config{}, fmt.Errorf("формат конфигурации: %w", err)
-	}
-	var extra interface{}
-	if err := dec.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return Config{}, errors.New("в config.json более одного JSON-объекта")
-		}
-		return Config{}, fmt.Errorf("лишние данные после JSON: %w", err)
-	}
-	if strings.TrimSpace(c.ConnectionString) == "" {
-		return Config{}, errors.New("connection_string не задан")
-	}
-	for field, val := range map[string]string{"list_sql": c.ListSQL, "contracts_sql": c.ContractsSQL, "document_types_sql": c.DocumentTypesSQL} {
-		if strings.TrimSpace(val) == "" {
-			return Config{}, fmt.Errorf("%s не задан", field)
-		}
-	}
-	if c.ListLimit == 0 {
-		c.ListLimit = 200
-	}
-	if c.LookupLimit == 0 {
-		c.LookupLimit = 100
-	}
-	if c.ListLimit < 1 || c.ListLimit > 1000 || c.LookupLimit < 1 || c.LookupLimit > 500 {
-		return Config{}, errors.New("list_limit должен быть 1..1000, lookup_limit — 1..500")
-	}
-	return c, nil
-}
-
 type ListItem struct {
-	ID             int
-	Agreement      string
-	Period         int
-	Amount         string
-	AutoPay        int
-	StartDay       int
-	StartMonth     int
-	DocumentsCode  int
-	PaymentCode    int
-	DisconnectCode int
+	ID     int
+	Values map[string]string
 }
+
 type Option struct {
 	ID    int
 	Label string
@@ -176,23 +114,6 @@ type Store struct {
 	Config Config
 }
 
-func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
-	rows, err := s.DB.QueryContext(ctx, s.Config.ListSQL, sql.Named("search", strings.TrimSpace(search)), sql.Named("limit", s.Config.ListLimit))
-	if err != nil {
-		return nil, fmt.Errorf("список договоров: %w", err)
-	}
-	defer rows.Close()
-	result := make([]ListItem, 0)
-	for rows.Next() {
-		var r ListItem
-		if err := rows.Scan(&r.ID, &r.Agreement, &r.Period, &r.Amount, &r.AutoPay, &r.StartDay, &r.StartMonth, &r.DocumentsCode, &r.PaymentCode, &r.DisconnectCode); err != nil {
-			return nil, fmt.Errorf("столбцы list_sql: %w", err)
-		}
-		result = append(result, r)
-	}
-	return result, rows.Err()
-}
-
 func (s Store) Lookup(ctx context.Context, query, search string, selectedID int) ([]Option, error) {
 	rows, err := s.DB.QueryContext(ctx, query, sql.Named("search", strings.TrimSpace(search)), sql.Named("limit", s.Config.LookupLimit), sql.Named("selected", selectedID))
 	if err != nil {
@@ -210,30 +131,13 @@ func (s Store) Lookup(ctx context.Context, query, search string, selectedID int)
 	return result, rows.Err()
 }
 
-const selectSQL = `SELECT
- [КодДокументаДоговораОказанияУслуг], [КодТипаДокументаОснованияАвтооплаты],
- [ПериодОказанияУслуги], [Автооплата],
- CONVERT(nvarchar(40),CONVERT(decimal(19,4),[СуммаАбонентскойПлаты])),
- [ДеньМесяцаНачалаОказанияУслуги], [МесяцНачалаОказанияУслуги],
- [ДеньМесяцаПолученияДокументов], [ДеньМесяцаОплатыПоДоговору],
- [ДеньМесяцаОтключенияУслуги], [ОповещениеКуратора]
-FROM ` + target + ` WHERE [КодДокументаДоговораОказанияУслуг]=@id`
-
 func (s Store) Get(ctx context.Context, id int) (Record, error) {
 	var r Record
-	err := s.DB.QueryRowContext(ctx, selectSQL, sql.Named("id", id)).Scan(
+	err := s.DB.QueryRowContext(ctx, s.Config.GetSQL, sql.Named("id", id)).Scan(
 		&r.ContractID, &r.TypeID, &r.Period, &r.AutoPay, &r.Amount,
 		&r.StartDay, &r.StartMonth, &r.DocumentsCode, &r.PaymentCode, &r.DisconnectCode, &r.Notify)
 	return r, err
 }
-
-const insertSQL = `INSERT INTO ` + target + ` (
- [КодДокументаДоговораОказанияУслуг],[КодТипаДокументаОснованияАвтооплаты],
- [ПериодОказанияУслуги],[Автооплата],[СуммаАбонентскойПлаты],
- [ДеньМесяцаНачалаОказанияУслуги],[МесяцНачалаОказанияУслуги],
- [ДеньМесяцаПолученияДокументов],[ДеньМесяцаОплатыПоДоговору],
- [ДеньМесяцаОтключенияУслуги],[ОповещениеКуратора]
-) VALUES (@id,@type,@period,@auto,CONVERT(money,@amount),@day,@month,@docs,@pay,@off,@notify)`
 
 func recordArgs(r Record) []interface{} {
 	return []interface{}{sql.Named("id", r.ContractID), sql.Named("type", r.TypeID), sql.Named("period", r.Period),
@@ -245,30 +149,9 @@ func (s Store) Insert(ctx context.Context, r Record) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
-	_, err := s.DB.ExecContext(ctx, insertSQL, recordArgs(r)...)
+	_, err := s.DB.ExecContext(ctx, s.Config.InsertSQL, recordArgs(r)...)
 	return err
 }
-
-const updateSQL = `UPDATE ` + target + ` SET
- [КодТипаДокументаОснованияАвтооплаты]=@type,
- [ПериодОказанияУслуги]=@period,[Автооплата]=@auto,
- [СуммаАбонентскойПлаты]=CONVERT(money,@amount),
- [ДеньМесяцаНачалаОказанияУслуги]=@day,
- [МесяцНачалаОказанияУслуги]=@month,
- [ДеньМесяцаПолученияДокументов]=@docs,
- [ДеньМесяцаОплатыПоДоговору]=@pay,
- [ДеньМесяцаОтключенияУслуги]=@off,
- [ОповещениеКуратора]=@notify
-WHERE [КодДокументаДоговораОказанияУслуг]=@id
- AND [КодТипаДокументаОснованияАвтооплаты]=@old_type
- AND [ПериодОказанияУслуги]=@old_period AND [Автооплата]=@old_auto
- AND [СуммаАбонентскойПлаты]=CONVERT(money,@old_amount)
- AND [ДеньМесяцаНачалаОказанияУслуги]=@old_day
- AND [МесяцНачалаОказанияУслуги]=@old_month
- AND [ДеньМесяцаПолученияДокументов]=@old_docs
- AND [ДеньМесяцаОплатыПоДоговору]=@old_pay
- AND [ДеньМесяцаОтключенияУслуги]=@old_off
- AND [ОповещениеКуратора]=@old_notify`
 
 var ErrConflict = errors.New("запись изменена или удалена другим пользователем; обновите список")
 
@@ -290,7 +173,7 @@ func (s Store) Update(ctx context.Context, original, updated Record) error {
 		sql.Named("old_day", original.StartDay), sql.Named("old_month", original.StartMonth),
 		sql.Named("old_docs", original.DocumentsCode), sql.Named("old_pay", original.PaymentCode),
 		sql.Named("old_off", original.DisconnectCode), sql.Named("old_notify", original.Notify))
-	res, err := s.DB.ExecContext(ctx, updateSQL, args...)
+	res, err := s.DB.ExecContext(ctx, s.Config.UpdateSQL, args...)
 	if err != nil {
 		return err
 	}
@@ -305,7 +188,7 @@ func (s Store) Update(ctx context.Context, original, updated Record) error {
 }
 
 func (s Store) Delete(ctx context.Context, id int) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM `+target+` WHERE [КодДокументаДоговораОказанияУслуг]=@id`, sql.Named("id", id))
+	res, err := s.DB.ExecContext(ctx, s.Config.DeleteSQL, sql.Named("id", id))
 	if err != nil {
 		return err
 	}

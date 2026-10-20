@@ -1,8 +1,55 @@
 {
-  "connection_string": "sqlserver://YOUR_SQL_SERVER:1433?database=YOUR_DATABASE&trusted_connection=yes&encrypt=true",
+  "connection_string": "sqlserver://YOUR_SQL_SERVER:1433?database=YOUR_DATABASE\u0026trusted_connection=yes\u0026encrypt=true",
   "list_limit": 200,
   "lookup_limit": 100,
-  "list_sql": "SELECT TOP (@limit)\n    t.[КодДокументаДоговораОказанияУслуг] AS ContractID,\n    CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) AS AgreementLabel,\n    t.[ПериодОказанияУслуги] AS ServicePeriod,\n    CONVERT(nvarchar(40), CONVERT(decimal(19,4), t.[СуммаАбонентскойПлаты])) AS Amount,\n    t.[Автооплата] AS AutoPay,\n    t.[ДеньМесяцаНачалаОказанияУслуги] AS StartDay,\n    t.[МесяцНачалаОказанияУслуги] AS StartMonth,\n    t.[ДеньМесяцаПолученияДокументов] AS DocumentsCode,\n    t.[ДеньМесяцаОплатыПоДоговору] AS PaymentCode,\n    t.[ДеньМесяцаОтключенияУслуги] AS DisconnectCode\nFROM dbo.[ДокументыДоговораОказанияУслуг] AS t\nWHERE @search = N''\n   OR CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%'\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC",
-  "contracts_sql": "SELECT TOP (@limit)\n    d.[КодДокумента] AS ContractID,\n    CONVERT(nvarchar(30), d.[КодДокумента]) AS ContractLabel\nFROM dbo.[ДокументыДанные] AS d\nWHERE @search = N''\n   OR CONVERT(nvarchar(30), d.[КодДокумента]) LIKE N'%' + @search + N'%'\n   OR d.[КодДокумента] = @selected\nORDER BY d.[КодДокумента] DESC",
-  "document_types_sql": "SELECT TOP (@limit)\n    t.[КодТипаДокумента] AS TypeID,\n    CONVERT(nvarchar(30), t.[КодТипаДокумента]) AS TypeLabel\nFROM dbo.[ТипыДокументов] AS t\nWHERE @search = N''\n   OR CONVERT(nvarchar(30), t.[КодТипаДокумента]) LIKE N'%' + @search + N'%'\n   OR t.[КодТипаДокумента] = @selected\nORDER BY t.[КодТипаДокумента]"
+  "list_sql": "SELECT TOP (@limit)\n    t.[КодДокументаДоговораОказанияУслуг] AS ContractID,\n    CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) AS AgreementLabel,\n    t.[ПериодОказанияУслуги] AS ServicePeriod,\n    CONVERT(nvarchar(40), CONVERT(decimal(19,4), t.[СуммаАбонентскойПлаты])) AS Amount,\n    t.[Автооплата] AS AutoPay,\n    t.[ДеньМесяцаНачалаОказанияУслуги] AS StartDay,\n    t.[МесяцНачалаОказанияУслуги] AS StartMonth,\n    t.[ДеньМесяцаПолученияДокументов] AS DocumentsCode,\n    t.[ДеньМесяцаОплатыПоДоговору] AS PaymentCode,\n    t.[ДеньМесяцаОтключенияУслуги] AS DisconnectCode\nFROM dbo.[ДокументыДоговораОказанияУслуг] AS t\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC",
+  "search_sql": "SELECT TOP (@limit)\n    t.[КодДокументаДоговораОказанияУслуг] AS ContractID,\n    CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) AS AgreementLabel,\n    t.[ПериодОказанияУслуги] AS ServicePeriod,\n    CONVERT(nvarchar(40), CONVERT(decimal(19,4), t.[СуммаАбонентскойПлаты])) AS Amount,\n    t.[Автооплата] AS AutoPay,\n    t.[ДеньМесяцаНачалаОказанияУслуги] AS StartDay,\n    t.[МесяцНачалаОказанияУслуги] AS StartMonth,\n    t.[ДеньМесяцаПолученияДокументов] AS DocumentsCode,\n    t.[ДеньМесяцаОплатыПоДоговору] AS PaymentCode,\n    t.[ДеньМесяцаОтключенияУслуги] AS DisconnectCode\nFROM dbo.[ДокументыДоговораОказанияУслуг] AS t\nWHERE CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%'\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC",
+  "list_columns": [
+    {
+      "field": "ContractID",
+      "title": "Код договора",
+      "width": 120
+    },
+    {
+      "field": "AgreementLabel",
+      "title": "Договор",
+      "width": 220
+    },
+    {
+      "field": "ServicePeriodText",
+      "title": "Период",
+      "width": 120
+    },
+    {
+      "field": "Amount",
+      "title": "Абонентская плата",
+      "width": 140
+    },
+    {
+      "field": "DocumentsText",
+      "title": "Получение документов",
+      "width": 310
+    },
+    {
+      "field": "PaymentText",
+      "title": "Оплата по договору",
+      "width": 310
+    },
+    {
+      "field": "DisconnectText",
+      "title": "Отключение услуги",
+      "width": 310
+    },
+    {
+      "field": "AutoPayText",
+      "title": "Автооплата",
+      "width": 90
+    }
+  ],
+  "contracts_sql": "SELECT TOP (@limit)\n d.[КодДокумента] AS ContractID,\n CONVERT(nvarchar(30),d.[КодДокумента]) AS ContractLabel\nFROM dbo.[ДокументыДанные] AS d\nWHERE @search = N'' OR CONVERT(nvarchar(30),d.[КодДокумента]) LIKE N'%' + @search + N'%' OR d.[КодДокумента] = @selected\nORDER BY d.[КодДокумента] DESC",
+  "document_types_sql": "SELECT TOP (@limit)\n t.[КодТипаДокумента] AS TypeID,\n CONVERT(nvarchar(30),t.[КодТипаДокумента]) AS TypeLabel\nFROM dbo.[ТипыДокументов] AS t\nWHERE @search = N'' OR CONVERT(nvarchar(30),t.[КодТипаДокумента]) LIKE N'%' + @search + N'%' OR t.[КодТипаДокумента] = @selected\nORDER BY t.[КодТипаДокумента]",
+  "get_sql": "SELECT\n [КодДокументаДоговораОказанияУслуг], [КодТипаДокументаОснованияАвтооплаты],\n [ПериодОказанияУслуги], [Автооплата],\n CONVERT(nvarchar(40),CONVERT(decimal(19,4),[СуммаАбонентскойПлаты])),\n [ДеньМесяцаНачалаОказанияУслуги], [МесяцНачалаОказанияУслуги],\n [ДеньМесяцаПолученияДокументов], [ДеньМесяцаОплатыПоДоговору],\n [ДеньМесяцаОтключенияУслуги], [ОповещениеКуратора]\nFROM dbo.[ДокументыДоговораОказанияУслуг]\nWHERE [КодДокументаДоговораОказанияУслуг] = @id",
+  "insert_sql": "INSERT INTO dbo.[ДокументыДоговораОказанияУслуг] (\n [КодДокументаДоговораОказанияУслуг],[КодТипаДокументаОснованияАвтооплаты],\n [ПериодОказанияУслуги],[Автооплата],[СуммаАбонентскойПлаты],\n [ДеньМесяцаНачалаОказанияУслуги],[МесяцНачалаОказанияУслуги],\n [ДеньМесяцаПолученияДокументов],[ДеньМесяцаОплатыПоДоговору],\n [ДеньМесяцаОтключенияУслуги],[ОповещениеКуратора]\n) VALUES (@id,@type,@period,@auto,CONVERT(money,@amount),@day,@month,@docs,@pay,@off,@notify)",
+  "update_sql": "UPDATE dbo.[ДокументыДоговораОказанияУслуг] SET\n [КодТипаДокументаОснованияАвтооплаты]=@type,\n [ПериодОказанияУслуги]=@period,[Автооплата]=@auto,\n [СуммаАбонентскойПлаты]=CONVERT(money,@amount),\n [ДеньМесяцаНачалаОказанияУслуги]=@day,\n [МесяцНачалаОказанияУслуги]=@month,\n [ДеньМесяцаПолученияДокументов]=@docs,\n [ДеньМесяцаОплатыПоДоговору]=@pay,\n [ДеньМесяцаОтключенияУслуги]=@off,\n [ОповещениеКуратора]=@notify\nWHERE [КодДокументаДоговораОказанияУслуг]=@id\n AND [КодТипаДокументаОснованияАвтооплаты]=@old_type\n AND [ПериодОказанияУслуги]=@old_period AND [Автооплата]=@old_auto\n AND [СуммаАбонентскойПлаты]=CONVERT(money,@old_amount)\n AND [ДеньМесяцаНачалаОказанияУслуги]=@old_day\n AND [МесяцНачалаОказанияУслуги]=@old_month\n AND [ДеньМесяцаПолученияДокументов]=@old_docs\n AND [ДеньМесяцаОплатыПоДоговору]=@old_pay\n AND [ДеньМесяцаОтключенияУслуги]=@old_off\n AND [ОповещениеКуратора]=@old_notify",
+  "delete_sql": "DELETE FROM dbo.[ДокументыДоговораОказанияУслуг]\nWHERE [КодДокументаДоговораОказанияУслуг] = @id"
 }
