@@ -86,7 +86,7 @@ func ReconcileListColumns(existing []ListColumn, names []string) (ColumnSync, er
 		maxOrder++
 		result.Columns = append(result.Columns, ListColumn{
 			Field: name, Title: name, Width: 170, Order: maxOrder,
-			SortField: name, Visible: true,
+			SortField: name, Visible: !IsServiceField(name),
 		})
 		result.Added = append(result.Added, name)
 	}

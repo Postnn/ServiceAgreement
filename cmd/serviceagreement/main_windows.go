@@ -74,7 +74,7 @@ func run() error {
 	if loadErr != nil {
 		cfg = core.DefaultConfig()
 	}
-	app := &application{cfgPath: path, store: core.Store{Config: cfg}, model: &tableModel{columns: core.VisibleColumns(cfg.ListColumns)}, withoutModel: &tableModel{columns: core.UnconfiguredColumns([]string{"ContractID"})}}
+	app := &application{cfgPath: path, store: core.Store{Config: cfg}, model: &tableModel{columns: core.VisibleColumns(cfg.ListColumns)}, withoutModel: &tableModel{columns: core.UnconfiguredColumns([]string{"ContractID", "Договор"})}}
 	gearIcon, err := makeSettingsGearBitmap()
 	if err != nil {
 		return fmt.Errorf("значок настроек: %w", err)
@@ -185,7 +185,7 @@ func (a *application) connect(cfg core.Config) error {
 	}
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
-	ctx, cancel := core.QueryContext()
+	ctx, cancel := cfg.QueryContext()
 	err = db.PingContext(ctx)
 	cancel()
 	if err != nil {
@@ -242,7 +242,7 @@ func (a *application) sortByColumn(index int) {
 // result sets. New SELECT aliases are visible by default. SQL fields which
 // were removed are discarded only after the user confirms the proposal.
 func reconcileColumnSettings(owner walk.Form, db *sql.DB, cfg *core.Config) (bool, bool, error) {
-	ctx, cancel := core.QueryContext()
+	ctx, cancel := cfg.QueryContext()
 	names, err := core.QueryListSchema(ctx, db, *cfg)
 	cancel()
 	if err != nil {
@@ -303,7 +303,7 @@ func (a *application) refresh() {
 	if !a.synchronizeListColumns() {
 		return
 	}
-	ctx, cancel := core.QueryContext()
+	ctx, cancel := a.store.Config.QueryContext()
 	defer cancel()
 	rows, err := a.store.List(ctx, a.search.Text())
 	if err != nil {
@@ -340,7 +340,7 @@ func (a *application) editSelected() {
 		walk.MsgBox(a.win, "Выбор записи", "Выберите договор в списке.", walk.MsgBoxIconInformation)
 		return
 	}
-	ctx, cancel := core.QueryContext()
+	ctx, cancel := a.store.Config.QueryContext()
 	r, err := a.store.Get(ctx, id)
 	cancel()
 	if err != nil {
@@ -361,7 +361,7 @@ func (a *application) deleteSelected() {
 	if answer != walk.DlgCmdYes {
 		return
 	}
-	ctx, cancel := core.QueryContext()
+	ctx, cancel := a.store.Config.QueryContext()
 	err := a.store.Delete(ctx, id)
 	cancel()
 	if err != nil {
@@ -379,10 +379,11 @@ func (a *application) refreshBoth() {
 }
 
 func (a *application) applyUnconfiguredColumns(names []string) error {
-	unchanged := len(a.withoutModel.columns) == len(names)
+	cols := core.UnconfiguredColumns(names)
+    unchanged := len(a.withoutModel.columns) == len(cols)
 	if unchanged {
-		for i, name := range names {
-			if !strings.EqualFold(a.withoutModel.columns[i].Field, name) {
+		for i, col := range cols {
+			if !strings.EqualFold(a.withoutModel.columns[i].Field, col.Field) {
 				unchanged = false
 				break
 			}
@@ -390,7 +391,6 @@ func (a *application) applyUnconfiguredColumns(names []string) error {
 	}
 	if unchanged { return nil }
 	if err := a.withoutTable.Columns().Clear(); err != nil { return err }
-	cols := core.UnconfiguredColumns(names)
 	a.withoutModel.columns = cols
 	a.withoutSortField, a.withoutSortDescending = "", false
 	for _, col := range cols {
@@ -409,7 +409,7 @@ func (a *application) refreshWithout() {
 		a.withoutStatus.SetText("Нет подключения к SQL Server")
 		return
 	}
-	ctx, cancel := core.QueryContext()
+	ctx, cancel := a.store.Config.QueryContext()
 	defer cancel()
 	result, err := a.store.ListUnconfigured(ctx, a.withoutSearch.Text())
 	if err != nil {

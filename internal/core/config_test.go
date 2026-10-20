@@ -39,6 +39,7 @@ func TestSaveLoadConfigAndBackwardCompatibility(t *testing.T) {
 	cfg.ConnectionString = "sqlserver://testing?database=Договоры"
 	cfg.ListColumns = append(cfg.ListColumns, ListColumn{Field: "CustomContractNumber", Title: "Наш №", Width: 180, Order: len(cfg.ListColumns) + 1, SortField: "ContractID", Visible: true})
 	cfg.UpdateSQL = "UPDATE t SET [Name]=@type\nWHERE id=@id"
+    cfg.ConnectionTimeoutSeconds = 75
 	if err := SaveConfig(p, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +47,7 @@ func TestSaveLoadConfigAndBackwardCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.UpdateSQL != cfg.UpdateSQL || len(got.ListColumns) != len(cfg.ListColumns) {
+	if got.UpdateSQL != cfg.UpdateSQL || got.ConnectionTimeoutSeconds != 75 || len(got.ListColumns) != len(cfg.ListColumns) {
 		t.Fatalf("config lost after serialization: %+v", got)
 	}
 	cfg.DeleteSQL = "DELETE FROM dbo.t WHERE id=@id"
@@ -72,7 +73,7 @@ func TestSaveLoadConfigAndBackwardCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if oldConfig.ListSQL != "SELECT 1" || oldConfig.WithoutParametersSQL == "" || oldConfig.GetSQL == "" || len(oldConfig.ListColumns) == 0 {
+	if oldConfig.ListSQL != "SELECT 1" || oldConfig.WithoutParametersSQL == "" || oldConfig.GetSQL == "" || oldConfig.ConnectionTimeoutSeconds != DefaultConfig().ConnectionTimeoutSeconds || len(oldConfig.ListColumns) == 0 {
 		t.Fatalf("backwards migration: %+v", oldConfig)
 	}
 }
@@ -87,7 +88,7 @@ func TestColumnsSortAndVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := VisibleColumns(cols)
-	if len(got) != 2 || got[0].Field != "ContractID" || got[1].Field != "Name" {
+	if len(got) != 1 || got[0].Field != "Name" {
 		t.Fatalf("visibility/order: %+v", got)
 	}
 	bad := append([]ListColumn(nil), cols...)
@@ -118,6 +119,10 @@ func TestColumnsSortAndVisibility(t *testing.T) {
 	if err := ValidateColumns(upgraded); err != nil {
 		t.Fatal(err)
 	}
+    displayed := VisibleColumns(upgraded)
+    if len(displayed) != 1 || displayed[0].Field != "Name" {
+        t.Fatalf("legacy visible ContractID must not appear: %+v", displayed)
+    }
 	explicit := `{"field":"Name","title":"Имя","width":123,"order":4,"sortField":"SortID","visible":false}`
 	var configured ListColumn
 	if err := json.Unmarshal([]byte(explicit), &configured); err != nil {
@@ -238,5 +243,42 @@ func TestAgreementNameQueriesAndFactoryMigration(t *testing.T) {
         actual.ContractsSQL != customized.ContractsSQL ||
         actual.ListSQL != customized.ListSQL {
         t.Fatal("custom SQL was overwritten")
+    }
+}
+
+func TestServiceColumnsCannotBeDisplayed(t *testing.T) {
+    columns := []ListColumn{
+        {Field:"cOnTrAcTiD", Title:"Код", Width:90, Order:1, SortField:"ContractID", Visible:true},
+        {Field:"SearchText", Title:"Поиск", Width:100, Order:2, SortField:"SearchText", Visible:true},
+        {Field:"AgreementLabel", Title:"Договор", Width:300, Order:3, SortField:"ContractID", Visible:true},
+        {Field:"Amount", Title:"Сумма", Width:120, Order:4, SortField:"Amount", Visible:false},
+    }
+    if err := ValidateColumns(columns); err != nil { t.Fatal(err) }
+    if got := VisibleColumns(columns); len(got) != 1 || got[0].Field != "AgreementLabel" {
+        t.Fatalf("service fields must be unconditionally hidden: %+v", got)
+    }
+    if !IsServiceField(" contractid ") || !IsServiceField("SEARCHtext") ||
+       IsServiceField("AgreementLabel") {
+        t.Fatal("service alias recognition is incorrect")
+    }
+    cfg := DefaultConfig()
+    for _, col := range cfg.ListColumns {
+        if IsServiceField(col.Field) && col.Visible {
+            t.Fatalf("factory configuration must mark service alias hidden: %+v", col)
+        }
+    }
+}
+
+func TestConnectionTimeoutConfigValidation(t *testing.T) {
+    cfg := DefaultConfig()
+    cfg.ConnectionString = "sqlserver://test"
+    if cfg.ConnectionTimeoutSeconds != 30 { t.Fatalf("default timeout should be 30 seconds, got %d", cfg.ConnectionTimeoutSeconds) }
+    for _, seconds := range []int{1, 30, 90, 3600} {
+        cfg.ConnectionTimeoutSeconds = seconds
+        if err := cfg.Validate(); err != nil { t.Fatalf("%d sec: %v", seconds, err) }
+    }
+    for _, seconds := range []int{0, -1, 3601} {
+        cfg.ConnectionTimeoutSeconds = seconds
+        if cfg.Validate() == nil { t.Fatalf("invalid timeout %d was accepted", seconds) }
     }
 }

@@ -15,21 +15,23 @@ type UnconfiguredResult struct {
 	Items   []ListItem
 }
 
-// UnconfiguredColumns builds a visible column for every SQL alias in SELECT
-// order. Only the user-provided SQL determines which fields appear.
+// UnconfiguredColumns displays all returned columns except ContractID and
+// SearchText. Those service aliases remain in the SQL result for identity
+// and searching, but are never added to the table UI.
 func UnconfiguredColumns(names []string) []ListColumn {
 	columns := make([]ListColumn, 0, len(names))
-	for i, name := range names {
-		width := 170
-		if strings.EqualFold(name, "ContractID") {
-			width = 120
-		} else if strings.EqualFold(name, "ContractName") || strings.EqualFold(name, "Договор") {
-			width = 350
-		}
-		columns = append(columns, ListColumn{
-			Field: name, Title: name, Width: width, Order: i + 1,
-			SortField: name, Visible: true,
-		})
+	for _, name := range names {
+        if IsServiceField(name) {
+            continue
+        }
+        width := 170
+        if strings.EqualFold(name, "ContractName") || strings.EqualFold(name, "Договор") {
+            width = 350
+        }
+        columns = append(columns, ListColumn{
+            Field: name, Title: name, Width: width, Order: len(columns) + 1,
+            SortField: name, Visible: true,
+        })
 	}
 	return columns
 }

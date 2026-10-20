@@ -58,7 +58,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 	var autoBox, notifyBox *walk.CheckBox
 	var saveButton *walk.PushButton
 	lookup := func(sqlText, search string, selected int) ([]core.Option, error) {
-		ctx, cancel := core.QueryContext()
+		ctx, cancel := a.store.Config.QueryContext()
 		defer cancel()
 		return a.store.Lookup(ctx, sqlText, search, selected)
 	}
@@ -206,7 +206,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 			return
 		}
 		saveButton.SetEnabled(false)
-		ctx, cancel := core.QueryContext()
+		ctx, cancel := a.store.Config.QueryContext()
 		if existing {
 			err = a.store.Update(ctx, original, updated)
 		} else {

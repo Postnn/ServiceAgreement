@@ -28,7 +28,7 @@ func synchronizeDraftColumns(owner walk.Form, cfg *core.Config) (bool, bool, err
 		return false, false, fmt.Errorf("%w: %v", errSQLUnavailable, err)
 	}
 	defer db.Close()
-	ctx, cancel := core.QueryContext()
+	ctx, cancel := cfg.QueryContext()
 	err = db.PingContext(ctx)
 	cancel()
 	if err != nil {
@@ -41,7 +41,7 @@ func synchronizeDraftColumns(owner walk.Form, cfg *core.Config) (bool, bool, err
 // Changes are applied to a copy and persisted only on Save.
 func (a *application) openSettings() {
 	var dlg *walk.Dialog
-	var connection, listLimit, lookupLimit *walk.LineEdit
+	var connection, listLimit, lookupLimit, connectionTimeout *walk.LineEdit
 	var sqlPicker *walk.ComboBox
 	var sqlEdit *walk.TextEdit
 	cfg := a.store.Config
@@ -89,6 +89,10 @@ func (a *application) openSettings() {
 		if err != nil {
 			return err
 		}
+        cfg.ConnectionTimeoutSeconds, err = core.ParseIntField("Таймаут SQL (сек.)", connectionTimeout.Text())
+        if err != nil {
+            return err
+        }
 		return cfg.Validate()
 	}
 	onTest := func() {
@@ -97,9 +101,16 @@ func (a *application) openSettings() {
 			settingsError(dlg, "Проверка подключения", fmt.Errorf("заполните строку подключения"))
 			return
 		}
-		db, err := sql.Open("sqlserver", dsn)
+		seconds, err := core.ParseIntField("Таймаут SQL (сек.)", connectionTimeout.Text())
+        if err != nil || seconds < 1 || seconds > 3600 {
+            settingsError(dlg, "Проверка подключения", fmt.Errorf("таймаут SQL должен быть целым числом от 1 до 3600 секунд"))
+            return
+        }
+        db, err := sql.Open("sqlserver", dsn)
 		if err == nil {
-			ctx, cancel := core.QueryContext()
+            draft := cfg
+            draft.ConnectionTimeoutSeconds = seconds
+			ctx, cancel := draft.QueryContext()
 			err = db.PingContext(ctx)
 			cancel()
 			_ = db.Close()
@@ -166,8 +177,13 @@ func (a *application) openSettings() {
 			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 				Label{Text: "Макс. строк списка:"}, LineEdit{AssignTo: &listLimit, Text: strconv.Itoa(cfg.ListLimit), MaxLength: 5},
 				Label{Text: "Макс. совпадений справочника:"}, LineEdit{AssignTo: &lookupLimit, Text: strconv.Itoa(cfg.LookupLimit), MaxLength: 5},
-				PushButton{Text: "Проверить подключение", OnClicked: onTest},
-			}},
+                PushButton{Text: "Проверить подключение", OnClicked: onTest},
+            }},
+            Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
+                Label{Text: "Таймаут выполнения SQL-запросов (сек.):"},
+                LineEdit{AssignTo: &connectionTimeout, Text: strconv.Itoa(cfg.ConnectionTimeoutSeconds), MaxLength: 4},
+                HSpacer{},
+            }},
 			Label{Text: "Редактирование SQL-запросов — выберите назначение, затем изменяйте текст:"},
 			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 				ComboBox{AssignTo: &sqlPicker, Model: sqlNames, CurrentIndex: 0, OnCurrentIndexChanged: onSQLChanged},
@@ -257,7 +273,8 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 			_ = width.SetText(strconv.Itoa(x.Width))
 			_ = order.SetText(strconv.Itoa(x.Order))
 			_ = sortField.SetText(x.SortField)
-			visible.SetChecked(x.Visible)
+			visible.SetChecked(x.Visible && !core.IsServiceField(x.Field))
+                visible.SetEnabled(!core.IsServiceField(x.Field))
 		} else {
 			_ = field.SetText("")
 			_ = title.SetText("")
@@ -265,6 +282,7 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 			_ = order.SetText("")
 			_ = sortField.SetText("")
 			visible.SetChecked(false)
+                visible.SetEnabled(false)
 		}
 	}
 	applyRow := func() bool {
@@ -283,7 +301,7 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 		}
 		x := core.ListColumn{
 			Field: strings.TrimSpace(field.Text()), Title: strings.TrimSpace(title.Text()),
-			Width: w, Order: o, SortField: strings.TrimSpace(sortField.Text()), Visible: visible.Checked(),
+			Width: w, Order: o, SortField: strings.TrimSpace(sortField.Text()), Visible: visible.Checked() && !core.IsServiceField(field.Text()),
 		}
 		tmp := append([]core.ListColumn(nil), model.columns...)
 		tmp[current] = x

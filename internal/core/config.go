@@ -61,11 +61,19 @@ func OrderedColumns(cols []ListColumn) []ListColumn {
 	return result
 }
 
-// VisibleColumns returns the configured display subset, in explicit order.
+// IsServiceField returns true for aliases needed for lookup and filtering,
+// which must never be presented as ordinary columns in either table.
+func IsServiceField(field string) bool {
+    return strings.EqualFold(strings.TrimSpace(field), "ContractID") ||
+        strings.EqualFold(strings.TrimSpace(field), "SearchText")
+}
+
+// VisibleColumns never displays service fields, even if an older config.json
+// explicitly marks either of them visible.
 func VisibleColumns(cols []ListColumn) []ListColumn {
 	var visible []ListColumn
 	for _, c := range OrderedColumns(cols) {
-		if c.Visible {
+		if c.Visible && !IsServiceField(c.Field) {
 			visible = append(visible, c)
 		}
 	}
@@ -74,6 +82,7 @@ func VisibleColumns(cols []ListColumn) []ListColumn {
 
 type Config struct {
 	ConnectionString string       `json:"connection_string"`
+    ConnectionTimeoutSeconds int `json:"connection_timeout_seconds"`
 	ListLimit        int          `json:"list_limit"`
 	LookupLimit      int          `json:"lookup_limit"`
 	ListSQL          string       `json:"list_sql"`
@@ -243,11 +252,12 @@ WHERE [КодДокументаДоговораОказанияУслуг] = @id
 func DefaultConfig() Config {
 	return Config{
 		ConnectionString: "",
+        ConnectionTimeoutSeconds: 30,
 		ListLimit:        200, LookupLimit: 100,
 		WithoutParametersSQL: defaultWithoutParametersSQL,
 		ListSQL: listProjection,
 		ListColumns: []ListColumn{
-			{Field: "ContractID", Title: "Код договора", Width: 120, Order: 1, SortField: "ContractID", Visible: true},
+			{Field: "ContractID", Title: "Код договора", Width: 120, Order: 1, SortField: "ContractID", Visible: false},
 			{Field: "AgreementLabel", Title: "Договор", Width: 220, Order: 2, SortField: "ContractID", Visible: true},
 			{Field: "ServicePeriodText", Title: "Период оказания услуги", Width: 200, Order: 3, SortField: "ServicePeriod", Visible: true},
 			{Field: "Amount", Title: "Абонентская плата", Width: 140, Order: 4, SortField: "Amount", Visible: true},
@@ -313,7 +323,10 @@ func (c Config) Validate() error {
 			return fmt.Errorf("не задан запрос %s", item.Key)
 		}
 	}
-	if c.ListLimit < 1 || c.ListLimit > 1000 || c.LookupLimit < 1 || c.LookupLimit > 500 {
+	if c.ConnectionTimeoutSeconds < 1 || c.ConnectionTimeoutSeconds > 3600 {
+        return errors.New("connection_timeout_seconds должен быть от 1 до 3600 секунд")
+    }
+    if c.ListLimit < 1 || c.ListLimit > 1000 || c.LookupLimit < 1 || c.LookupLimit > 500 {
 		return errors.New("list_limit должен быть 1..1000, lookup_limit — 1..500")
 	}
 	return ValidateColumns(c.ListColumns)

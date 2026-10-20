@@ -197,15 +197,19 @@ func TestUnconfiguredContractsUseConfiguredSQLAndDisplayEveryColumn(t *testing.T
 		t.Fatalf("SQL columns not exposed: %+v", result)
 	}
 	cols := UnconfiguredColumns(result.Columns)
-	if len(cols) != len(result.Columns) {
-		t.Fatalf("expected every SQL result column, got %v", cols)
-	}
-	for i, c := range cols {
-		if !c.Visible || c.Field != result.Columns[i] || c.Order != i+1 ||
-			c.Title != c.Field {
-			t.Errorf("new column %d must be visible as returned by SQL: %+v", i, c)
-		}
-	}
+	if len(cols) != len(result.Columns)-2 {
+        t.Fatalf("service fields must be hidden from the second list: %v", cols)
+    }
+    want := []string{"ContractName", "DateSigned", "CustomExtra"}
+    for i, c := range cols {
+        if !c.Visible || c.Field != want[i] || c.Order != i+1 || c.Title != c.Field {
+            t.Errorf("second list column %d: %+v",i,c)
+        }
+    }
+    if result.Items[0].ID != 1206 || result.Items[0].Field("SearchText") == "" ||
+       result.Items[0].Field("ContractID") != "1206" {
+        t.Fatal("hidden service fields must still be available internally")
+    }
 	cfg.WithoutParametersSQL = "query_unconfigured_empty"
 	store.Config = cfg
 	empty, err := store.ListUnconfigured(context.Background(), "")

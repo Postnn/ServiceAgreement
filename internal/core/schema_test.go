@@ -96,3 +96,14 @@ func TestQueryListSchemaUsesSingleSource(t *testing.T) {
         }
     }
 }
+
+func TestReconcileColumnsKeepsServiceAliasesHidden(t *testing.T) {
+    src := []ListColumn{{Field:"AgreementLabel",Title:"Договор",Width:200,Order:1,SortField:"ContractID",Visible:true}}
+    result, err := ReconcileListColumns(src, []string{"ContractID", "SearchText", "AgreementLabel"})
+    if err != nil {t.Fatal(err)}
+    if len(result.Added) != 2 {t.Fatalf("expected both hidden SQL helpers to be discovered: %+v", result)}
+    shown := VisibleColumns(result.Columns)
+    if len(shown) != 1 || shown[0].Field != "AgreementLabel" {
+        t.Fatalf("helper fields should be hidden and user columns preserved: %+v", shown)
+    }
+}

@@ -203,9 +203,14 @@ func (s Store) Delete(ctx context.Context, id int) error {
 	return nil
 }
 
-// QueryContext helps UI calls finish instead of freezing on unreachable database.
-func QueryContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 12*time.Second)
+// QueryContext applies the user-configured deadline to all database operations,
+// including connection checks, list/search queries, lookup, reads, and writes.
+func (c Config) QueryContext() (context.Context, context.CancelFunc) {
+    seconds := c.ConnectionTimeoutSeconds
+    if seconds <= 0 {
+        seconds = 30 // Config literals created without LoadConfig
+    }
+    return context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second)
 }
 
 // ParseIntField is shared by UI and unit tests.
