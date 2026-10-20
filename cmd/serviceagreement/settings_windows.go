@@ -192,14 +192,14 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 			_ = width.SetText(strconv.Itoa(x.Width))
 			_ = order.SetText(strconv.Itoa(x.Order))
 			_ = sortField.SetText(x.SortField)
-			_ = visible.SetChecked(x.Visible)
+			visible.SetChecked(x.Visible)
 		} else {
 			_ = field.SetText("")
 			_ = title.SetText("")
 			_ = width.SetText("")
 			_ = order.SetText("")
 			_ = sortField.SetText("")
-			_ = visible.SetChecked(false)
+			visible.SetChecked(false)
 		}
 	}
 	applyRow := func() bool {
