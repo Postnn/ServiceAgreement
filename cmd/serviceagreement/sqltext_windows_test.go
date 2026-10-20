@@ -33,6 +33,25 @@ func TestSQLTextEditorLineEndingConversion(t *testing.T) {
 	}
 }
 
+// SQL pasted from SSMS must keep the exact visible layout. No automatic
+// formatting is allowed on opening the editor or changing the SQL selector.
+func TestSQLTextEditorKeepsOriginalPastedLayout(t *testing.T) {
+	original := "\t SELECT  a,\t\tb   \r\n\r\n  FROM dbo.[ДокументыДанные] \t\r\n\t-- авторский комментарий  \r\nWHERE a = @id;  \r\n"
+	winText := sqlTextForEditor(original)
+	if winText != original {
+		t.Fatalf("opening SQL in editor changed user whitespace: got %q, want %q", winText, original)
+	}
+	want := strings.ReplaceAll(original, "\r\n", "\n")
+	if got := sqlTextFromEditor(winText); got != want {
+		t.Fatalf("switch/save changed whitespace: got %q, want %q", got, want)
+	}
+	// A formatter is allowed to change this layout only when explicitly called.
+	formatted := core.FormatSQL(want)
+	if formatted == want {
+		t.Fatal("test requires deliberately unformatted SQL text")
+	}
+}
+
 func TestNativeTextEditRendersFormattedSQLOnMultipleLines(t *testing.T) {
 	// Verify the exact Win32 control used by the settings dialog, not just
 	// strings. The control's EM_GETLINECOUNT reports visual line breaks.
