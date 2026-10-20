@@ -42,6 +42,12 @@ func chosenDay(idx int) (int, error) {
 
 // edit displays the record-editing dialog.
 func (a *application) edit(original core.Record, existing bool) bool {
+	return a.editWithContract(original, existing, false)
+}
+
+// The second list fixes ContractID to the selected agreement while all other
+// service terms remain editable. No additional edit form is needed.
+func (a *application) editWithContract(original core.Record, existing bool, lockContract bool) bool {
 	var dlg *walk.Dialog
 	var amount, day *walk.LineEdit
 	var docMonths, payMonths, offMonths *walk.LineEdit
@@ -174,6 +180,10 @@ func (a *application) edit(original core.Record, existing bool) bool {
 			Amount: strings.TrimSpace(amount.Text()), StartDay: d, StartMonth: monthBox.CurrentIndex() + 1,
 			DocumentsCode: docCode, PaymentCode: payCode, DisconnectCode: offCode,
 		}
+		if lockContract {
+			// A disabled ComboBox must not be able to change the selected contract.
+			updated.ContractID = original.ContractID
+		}
 		if autoBox.Checked() {
 			updated.AutoPay = 1
 		}
@@ -217,7 +227,7 @@ func (a *application) edit(original core.Record, existing bool) bool {
 			Composite{Layout: Grid{Columns: 2, Spacing: 6}, Children: []Widget{
 				Label{Text: "Договор:"},
 				ComboBox{AssignTo: &contractBox, Editable: true, Model: optionLabels(contractOptions),
-					CurrentIndex: optionIndex(contractOptions, original.ContractID), Enabled: !existing,
+					CurrentIndex: optionIndex(contractOptions, original.ContractID), Enabled: !existing && !lockContract,
 					OnTextChanged:         func() { contractChoice.typed() },
 					OnCurrentIndexChanged: func() { contractChoice.chose() },
 					OnEditingFinished:     func() { contractChoice.search() },
