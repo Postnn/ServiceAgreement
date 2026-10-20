@@ -37,7 +37,7 @@ func TestSaveLoadConfigAndBackwardCompatibility(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.json")
 	cfg := DefaultConfig()
 	cfg.ConnectionString = "sqlserver://testing?database=Договоры"
-	cfg.ListColumns = append(cfg.ListColumns, ListColumn{Field: "CustomContractNumber", Title: "Наш №", Width: 180, Order: 9, SortField: "ContractID", Visible: true})
+	cfg.ListColumns = append(cfg.ListColumns, ListColumn{Field: "CustomContractNumber", Title: "Наш №", Width: 180, Order: len(cfg.ListColumns) + 1, SortField: "ContractID", Visible: true})
 	cfg.UpdateSQL = "UPDATE t SET [Name]=@type\nWHERE id=@id"
 	if err := SaveConfig(p, cfg); err != nil {
 		t.Fatal(err)

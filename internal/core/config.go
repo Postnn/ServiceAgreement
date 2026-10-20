@@ -188,6 +188,15 @@ ORDER BY t.[КодДокументаДоговораОказанияУслуг] 
 			{Field: "PaymentText", Title: "Оплата по договору", Width: 305, Order: 6, SortField: "PaymentCode", Visible: true},
 			{Field: "DisconnectText", Title: "Отключение услуги", Width: 305, Order: 7, SortField: "DisconnectCode", Visible: true},
 			{Field: "AutoPayText", Title: "Автооплата", Width: 90, Order: 8, SortField: "AutoPay", Visible: true},
+			// Hidden SQL-only helpers remain available as sortField targets.
+			// Newly discovered aliases NOT listed here are visible by default.
+			{Field: "ServicePeriod", Title: "Период (число)", Width: 140, Order: 9, SortField: "ServicePeriod", Visible: false},
+			{Field: "AutoPay", Title: "Автооплата (код)", Width: 120, Order: 10, SortField: "AutoPay", Visible: false},
+			{Field: "StartDay", Title: "День начала периода", Width: 150, Order: 11, SortField: "StartDay", Visible: false},
+			{Field: "StartMonth", Title: "Месяц начала периода", Width: 150, Order: 12, SortField: "StartMonth", Visible: false},
+			{Field: "DocumentsCode", Title: "Получение документов (XDD)", Width: 180, Order: 13, SortField: "DocumentsCode", Visible: false},
+			{Field: "PaymentCode", Title: "Оплата (XDD)", Width: 160, Order: 14, SortField: "PaymentCode", Visible: false},
+			{Field: "DisconnectCode", Title: "Отключение (XDD)", Width: 170, Order: 15, SortField: "DisconnectCode", Visible: false},
 		},
 		ContractsSQL: `SELECT TOP (@limit)
  d.[КодДокумента] AS ContractID,

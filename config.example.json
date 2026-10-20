@@ -68,6 +68,62 @@
       "order": 8,
       "sortField": "AutoPay",
       "visible": true
+    },
+    {
+      "field": "ServicePeriod",
+      "title": "Период (число)",
+      "width": 160,
+      "order": 9,
+      "sortField": "ServicePeriod",
+      "visible": false
+    },
+    {
+      "field": "AutoPay",
+      "title": "Автооплата (код)",
+      "width": 160,
+      "order": 10,
+      "sortField": "AutoPay",
+      "visible": false
+    },
+    {
+      "field": "StartDay",
+      "title": "День начала периода",
+      "width": 160,
+      "order": 11,
+      "sortField": "StartDay",
+      "visible": false
+    },
+    {
+      "field": "StartMonth",
+      "title": "Месяц начала периода",
+      "width": 160,
+      "order": 12,
+      "sortField": "StartMonth",
+      "visible": false
+    },
+    {
+      "field": "DocumentsCode",
+      "title": "Получение документов (XDD)",
+      "width": 160,
+      "order": 13,
+      "sortField": "DocumentsCode",
+      "visible": false
+    },
+    {
+      "field": "PaymentCode",
+      "title": "Оплата (XDD)",
+      "width": 160,
+      "order": 14,
+      "sortField": "PaymentCode",
+      "visible": false
+    },
+    {
+      "field": "DisconnectCode",
+      "title": "Отключение (XDD)",
+      "width": 160,
+      "order": 15,
+      "sortField": "DisconnectCode",
+      "visible": false
     }
   ],
   "contracts_sql": "SELECT TOP (@limit)\n d.[КодДокумента] AS ContractID,\n CONVERT(nvarchar(30),d.[КодДокумента]) AS ContractLabel\nFROM dbo.[ДокументыДанные] AS d\nWHERE @search = N'' OR CONVERT(nvarchar(30),d.[КодДокумента]) LIKE N'%' + @search + N'%' OR d.[КодДокумента] = @selected\nORDER BY d.[КодДокумента] DESC",

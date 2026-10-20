@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/Postnn/ServiceAgreement/internal/core"
 	"github.com/lxn/walk"
@@ -175,12 +176,69 @@ func (a *application) sortByColumn(index int) {
 	a.status.SetText(fmt.Sprintf("Записей: %d; сортировка: %s %s", len(a.model.items), field, arrow))
 }
 
+// mergeColumnsFromSQL reconciles the stored appearance settings with both SQL
+// result sets. New SELECT aliases are visible by default. SQL fields which
+// were removed are discarded only after the user confirms the proposal.
+func reconcileColumnSettings(owner walk.Form, db *sql.DB, cfg *core.Config) (bool, bool, error) {
+	ctx, cancel := core.QueryContext()
+	names, err := core.QueryListSchema(ctx, db, *cfg)
+	cancel()
+	if err != nil {
+		return false, false, err
+	}
+	result, err := core.ReconcileListColumns(cfg.ListColumns, names)
+	if err != nil {
+		return false, false, err
+	}
+	if len(result.Removed) > 0 {
+		message := "В SQL-запросах списка больше нет следующих полей:\n\n" + strings.Join(result.Removed, ", ") +
+			"\n\nУдалить их настройки из list_columns?\nОтмена сохранит прежнюю конфигурацию."
+		if walk.MsgBox(owner, "Изменился состав колонок SQL", message, walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes {
+			return false, false, nil
+		}
+	}
+	cfg.ListColumns = result.Columns
+	return result.Changed(), true, nil
+}
+
+// Refreshing the SQL-based list also discovers new SELECT aliases when the
+// query changes outside the application. Auto-saved changes keep .bak backup.
+func (a *application) synchronizeListColumns() bool {
+	cfg := a.store.Config
+	changed, accepted, err := reconcileColumnSettings(a.win, a.store.DB, &cfg)
+	if err != nil {
+		a.warn("Структура колонок списка", err)
+		a.status.SetText("SQL-запросы списка возвращают несовместимые поля")
+		return false
+	}
+	if !accepted {
+		a.status.SetText("Синхронизация отменена. Исправьте SQL или настройки колонок.")
+		return false
+	}
+	if !changed {
+		return true
+	}
+	if err := core.SaveConfig(a.cfgPath, cfg); err != nil {
+		a.warn("Сохранение колонок", err)
+		return false
+	}
+	if err := a.applyColumns(cfg.ListColumns); err != nil {
+		a.warn("Отображение колонок", err)
+		return false
+	}
+	a.store.Config = cfg
+	return true
+}
+
 func (a *application) warn(title string, err error) {
 	walk.MsgBox(a.win, title, err.Error(), walk.MsgBoxIconError)
 }
 func (a *application) refresh() {
 	if a.store.DB == nil {
 		a.status.SetText("Нет подключения. Откройте настройки.")
+		return
+	}
+	if !a.synchronizeListColumns() {
 		return
 	}
 	ctx, cancel := core.QueryContext()

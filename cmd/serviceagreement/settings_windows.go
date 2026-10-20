@@ -4,6 +4,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -15,6 +16,25 @@ import (
 
 func settingsError(owner walk.Form, title string, err error) {
 	walk.MsgBox(owner, title, err.Error(), walk.MsgBoxIconError)
+}
+
+// errSQLUnavailable identifies connection failure, unlike invalid SELECT
+// projections, and allows editing settings offline.
+var errSQLUnavailable = errors.New("сервер SQL недоступен")
+
+func synchronizeDraftColumns(owner walk.Form, cfg *core.Config) (bool, bool, error) {
+	db, err := sql.Open("sqlserver", cfg.ConnectionString)
+	if err != nil {
+		return false, false, fmt.Errorf("%w: %v", errSQLUnavailable, err)
+	}
+	defer db.Close()
+	ctx, cancel := core.QueryContext()
+	err = db.PingContext(ctx)
+	cancel()
+	if err != nil {
+		return false, false, fmt.Errorf("%w: %v", errSQLUnavailable, err)
+	}
+	return reconcileColumnSettings(owner, db, cfg)
 }
 
 // openSettings allows editing multi-line SQL without opening JSON manually.
@@ -47,7 +67,12 @@ func (a *application) openSettings() {
 		}
 		commitCurrentSQL()
 		selectedSQL = next
-		_ = sqlEdit.SetText(*cfg.SQLAt(selectedSQL))
+		_ = sqlEdit.SetText(core.FormatSQL(*cfg.SQLAt(selectedSQL)))
+	}
+	formatCurrentSQL := func() {
+		if sqlEdit != nil {
+			_ = sqlEdit.SetText(core.FormatSQL(sqlEdit.Text()))
+		}
 	}
 	collect := func() error {
 		commitCurrentSQL()
@@ -87,17 +112,38 @@ func (a *application) openSettings() {
 			settingsError(dlg, "Ошибка конфигурации", err)
 			return
 		}
+		// Perform SQL schema synchronization BEFORE persisting the edited
+		// queries. If SQL Server is offline, saving the draft is still allowed
+		// after explicit confirmation; it will be synchronized when online.
+		_, accepted, schemaErr := synchronizeDraftColumns(dlg, &cfg)
+		if schemaErr != nil {
+			// A valid connection but incompatible SQL queries should not be
+			// silently saved. An unreachable server is handled separately.
+			if !errors.Is(schemaErr, errSQLUnavailable) {
+				settingsError(dlg, "Столбцы SQL-запросов", schemaErr)
+				return
+			}
+			message := "Не удалось проверить структуру списка: " + schemaErr.Error() +
+				"\n\nСохранить настройки без проверки колонок? Синхронизация выполнится при подключении."
+			if walk.MsgBox(dlg, "SQL Server недоступен", message, walk.MsgBoxYesNo|walk.MsgBoxIconWarning) != walk.DlgCmdYes {
+				return
+			}
+		} else if !accepted {
+			return
+		}
 		if err := core.SaveConfig(a.cfgPath, cfg); err != nil {
 			settingsError(dlg, "Не удалось сохранить config.json", err)
 			return
 		}
-		// New queries and columns take effect immediately; an invalid connection
-		// is reported but does not prevent reopening the settings editor.
 		if err := a.applyColumns(cfg.ListColumns); err != nil {
 			settingsError(dlg, "Колонки", err)
 			return
 		}
 		if err := a.connect(cfg); err != nil {
+			if a.store.DB != nil {
+				_ = a.store.DB.Close()
+				a.store.DB = nil
+			}
 			a.store.Config = cfg
 			a.status.SetText("Ошибка подключения — откройте настройки")
 			walk.MsgBox(dlg, "Конфигурация сохранена", "config.json сохранён, но подключиться не удалось:\n"+err.Error(), walk.MsgBoxIconWarning)
@@ -120,12 +166,17 @@ func (a *application) openSettings() {
 				PushButton{Text: "Проверить подключение", OnClicked: onTest},
 			}},
 			Label{Text: "Редактирование SQL-запросов — выберите назначение, затем изменяйте текст:"},
-			ComboBox{AssignTo: &sqlPicker, Model: sqlNames, CurrentIndex: 0, OnCurrentIndexChanged: onSQLChanged},
-			TextEdit{AssignTo: &sqlEdit, Text: cfg.ListSQL, VScroll: true, HScroll: true},
+			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
+				ComboBox{AssignTo: &sqlPicker, Model: sqlNames, CurrentIndex: 0, OnCurrentIndexChanged: onSQLChanged},
+				PushButton{Text: "Форматировать SQL", OnClicked: formatCurrentSQL},
+			}},
+			TextEdit{AssignTo: &sqlEdit, Text: core.FormatSQL(cfg.ListSQL), VScroll: true, HScroll: true,
+				Font: Font{Family: "Consolas", PointSize: 10}},
 			Label{Text: "SQL-параметры @search, @limit, @selected, @id и параметры записи описаны в README. Порядок SELECT для одной записи важен."},
 			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 				PushButton{Text: "Колонки списка…", OnClicked: func() {
 					commitCurrentSQL()
+					cfg.ConnectionString = strings.TrimSpace(connection.Text())
 					a.editColumns(dlg, &cfg)
 				}},
 				HSpacer{},
@@ -174,6 +225,17 @@ func (m *columnModel) Value(row, col int) interface{} {
 func (m *columnModel) reset() { m.PublishRowsReset() }
 
 func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
+	// Detect new SQL aliases on opening the editor, without requiring a
+	// separate Add button. The SQL query may be edited but not yet saved.
+	if _, accepted, err := synchronizeDraftColumns(owner, cfg); err != nil {
+		// Editing display settings is still possible if the server is offline.
+		if !errors.Is(err, errSQLUnavailable) {
+			settingsError(owner, "Структура SQL-запросов", err)
+			return
+		}
+	} else if !accepted {
+		return
+	}
 	model := &columnModel{columns: core.OrderedColumns(cfg.ListColumns)}
 	var dlg *walk.Dialog
 	var table *walk.TableView
@@ -236,41 +298,26 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 		}
 		return true
 	}
-	onAdd := func() {
+	onSync := func() {
 		if !applyRow() {
 			return
 		}
-		maxOrder := 0
-		for _, c := range model.columns {
-			if c.Order > maxOrder {
-				maxOrder = c.Order
-			}
-		}
-		fieldName := fmt.Sprintf("NewField%d", maxOrder+1)
-		model.columns = append(model.columns, core.ListColumn{
-			Field: fieldName, Title: "Новая колонка", Width: 140,
-			Order: maxOrder + 1, SortField: fieldName, Visible: true,
-		})
-		model.reset()
-		_ = table.SetCurrentIndex(len(model.columns) - 1)
-		loadRow()
-	}
-	onRemove := func() {
-		i := table.CurrentIndex()
-		if i < 0 || i >= len(model.columns) {
+		draft := *cfg
+		draft.ListColumns = append([]core.ListColumn(nil), model.columns...)
+		_, accepted, err := synchronizeDraftColumns(dlg, &draft)
+		if err != nil {
+			settingsError(dlg, "Не удалось обновить SQL-поля", err)
 			return
 		}
-		if len(model.columns) <= 1 {
-			walk.MsgBox(dlg, "Колонки", "Нужна хотя бы одна колонка.", walk.MsgBoxIconInformation)
+		if !accepted {
 			return
 		}
-		model.columns = append(model.columns[:i], model.columns[i+1:]...)
+		model.columns = core.OrderedColumns(draft.ListColumns)
 		model.reset()
-		if i >= len(model.columns) {
-			i = len(model.columns) - 1
+		if len(model.columns) > 0 {
+			_ = table.SetCurrentIndex(0)
+			loadRow()
 		}
-		_ = table.SetCurrentIndex(i)
-		loadRow()
 	}
 	onMove := func(delta int) {
 		if !applyRow() {
@@ -303,7 +350,7 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 		MinSize: Size{Width: 870, Height: 540}, Size: Size{Width: 1090, Height: 660},
 		Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}, Spacing: 8},
 		Children: []Widget{
-			Label{Text: "field и sortField — только алиасы результата list_sql и search_sql. Вычисляемые значения формируйте в SQL."},
+			Label{Text: "Поля формируются автоматически по list_sql и search_sql. Новые поля видимы; остальные параметры настраиваются ниже."},
 			TableView{AssignTo: &table, Model: model, NotSortableByHeaderClick: true, AlternatingRowBG: true,
 				Columns: []TableViewColumn{
 					{Title: "Порядок", Width: 80}, {Title: "Поле SQL", Width: 180},
@@ -313,7 +360,7 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 				OnCurrentIndexChanged: loadRow,
 			},
 			Composite{Layout: Grid{Columns: 2, Spacing: 6}, Children: []Widget{
-				Label{Text: "Имя поля SELECT (field):"}, LineEdit{AssignTo: &field},
+				Label{Text: "Имя поля SELECT (field):"}, LineEdit{AssignTo: &field, ReadOnly: true},
 				Label{Text: "Заголовок (title):"}, LineEdit{AssignTo: &title},
 				Label{Text: "Ширина (width, 45–1600):"}, LineEdit{AssignTo: &width},
 				Label{Text: "Порядок (order, от 1):"}, LineEdit{AssignTo: &order},
@@ -322,8 +369,7 @@ func (a *application) editColumns(owner walk.Form, cfg *core.Config) {
 			}},
 			Composite{Layout: HBox{Spacing: 7}, Children: []Widget{
 				PushButton{Text: "Применить к строке", OnClicked: func() { applyRow() }},
-				PushButton{Text: "Добавить", OnClicked: onAdd},
-				PushButton{Text: "Удалить", OnClicked: onRemove},
+				PushButton{Text: "Обновить поля из SQL", OnClicked: onSync},
 				PushButton{Text: "Вверх", OnClicked: func() { onMove(-1) }},
 				PushButton{Text: "Вниз", OnClicked: func() { onMove(1) }},
 			}},
