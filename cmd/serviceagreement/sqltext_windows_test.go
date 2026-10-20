@@ -7,8 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"syscall"
+	"unsafe"
+
 	"github.com/Postnn/ServiceAgreement/internal/core"
-	"github.com/lxn/walk"
 	"github.com/lxn/win"
 )
 
@@ -37,26 +39,30 @@ func TestNativeTextEditRendersFormattedSQLOnMultipleLines(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	form, err := walk.NewMainWindow()
-	if err != nil {
-		t.Fatalf("create test window: %v", err)
+	// Walk's TextEdit delegates to the system EDIT window via WM_SETTEXT.
+	// Test the same control directly: a full Walk form requires tooltip
+	// registration unavailable in non-interactive GitHub Actions sessions.
+	hwnd := win.CreateWindowEx(0, syscall.StringToUTF16Ptr("EDIT"), syscall.StringToUTF16Ptr(""),
+		win.WS_OVERLAPPED|win.ES_MULTILINE|win.ES_WANTRETURN,
+		0, 0, 640, 480, 0, 0, win.GetModuleHandle(nil), nil)
+	if hwnd == 0 {
+		t.Fatalf("CreateWindowEx EDIT failed: %v", syscall.GetLastError())
 	}
-	defer form.Dispose()
-	widget, err := walk.NewTextEdit(form)
-	if err != nil {
-		t.Fatalf("create native TextEdit: %v", err)
-	}
-	defer widget.Dispose()
+	defer win.DestroyWindow(hwnd)
 
 	query := core.FormatSQL("SELECT a, b FROM dbo.[ДокументыДанные] WHERE a = @id ORDER BY a DESC")
-	if err := widget.SetText(sqlTextForEditor(query)); err != nil {
-		t.Fatalf("populate TextEdit: %v", err)
+	value := syscall.StringToUTF16Ptr(sqlTextForEditor(query))
+	if win.SendMessage(hwnd, win.WM_SETTEXT, 0, uintptr(unsafe.Pointer(value))) == 0 {
+		t.Fatalf("WM_SETTEXT failed: %v", syscall.GetLastError())
 	}
-	lineCount := int(widget.SendMessage(win.EM_GETLINECOUNT, 0, 0))
+	lineCount := int(win.SendMessage(hwnd, win.EM_GETLINECOUNT, 0, 0))
 	if lineCount < 4 {
-		t.Fatalf("native TextEdit reports %d lines instead of multiple formatted lines; text=%q", lineCount, widget.Text())
+		t.Fatalf("native EDIT reports %d lines instead of multiple formatted lines", lineCount)
 	}
-	if after := sqlTextFromEditor(widget.Text()); after != query {
+	textLength := int(win.SendMessage(hwnd, win.WM_GETTEXTLENGTH, 0, 0))
+	buf := make([]uint16, textLength+1)
+	win.SendMessage(hwnd, win.WM_GETTEXT, uintptr(len(buf)), uintptr(unsafe.Pointer(&buf[0])))
+	if after := sqlTextFromEditor(syscall.UTF16ToString(buf)); after != query {
 		t.Fatalf("native control changed SQL text: got %q, want %q", after, query)
 	}
 }
