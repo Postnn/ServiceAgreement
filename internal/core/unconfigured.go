@@ -1,0 +1,99 @@
+package core
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// UnconfiguredResult retains the actual SELECT projection so every returned
+// column can be shown in the second list, including when there are no rows.
+// No list_columns settings, virtual fields or hidden fields are used here.
+type UnconfiguredResult struct {
+	Columns []string
+	Items   []ListItem
+}
+
+// UnconfiguredColumns builds a visible column for every SQL alias in SELECT
+// order. Only the user-provided SQL determines which fields appear.
+func UnconfiguredColumns(names []string) []ListColumn {
+	columns := make([]ListColumn, 0, len(names))
+	for i, name := range names {
+		width := 170
+		if strings.EqualFold(name, "ContractID") {
+			width = 120
+		} else if strings.EqualFold(name, "ContractName") {
+			width = 350
+		}
+		columns = append(columns, ListColumn{
+			Field: name, Title: name, Width: width, Order: i + 1,
+			SortField: name, Visible: true,
+		})
+	}
+	return columns
+}
+
+// ListUnconfigured executes the single configured SQL query for both the
+// unfiltered and filtered "contracts without parameters" views.
+// The query must accept @limit, @search and return a positive ContractID.
+func (s Store) ListUnconfigured(ctx context.Context, search string) (UnconfiguredResult, error) {
+	if s.DB == nil {
+		return UnconfiguredResult{}, fmt.Errorf("не задано соединение с SQL Server")
+	}
+	query := strings.TrimSpace(s.Config.WithoutParametersSQL)
+	if query == "" {
+		return UnconfiguredResult{}, fmt.Errorf("в настройках не задан without_parameters_sql")
+	}
+	rows, err := s.DB.QueryContext(ctx, query,
+		sql.Named("limit", s.Config.ListLimit),
+		sql.Named("search", strings.TrimSpace(search)))
+	if err != nil {
+		return UnconfiguredResult{}, fmt.Errorf("договоры без параметров: %w", err)
+	}
+	defer rows.Close()
+	names, err := rows.Columns()
+	if err != nil {
+		return UnconfiguredResult{}, err
+	}
+	if _, err := columnNames(names); err != nil {
+		return UnconfiguredResult{}, fmt.Errorf("without_parameters_sql: %w", err)
+	}
+	idIndex, err := ValidateResultColumns(names, nil)
+	if err != nil {
+		return UnconfiguredResult{}, err
+	}
+	result := UnconfiguredResult{
+		Columns: append([]string(nil), names...),
+		Items: make([]ListItem, 0),
+	}
+	for rows.Next() {
+		values := make([]any, len(names))
+		toScan := make([]any, len(names))
+		for i := range values {
+			toScan[i] = &values[i]
+		}
+		if err := rows.Scan(toScan...); err != nil {
+			return UnconfiguredResult{}, fmt.Errorf("чтение договора без параметров: %w", err)
+		}
+		id, err := strconv.Atoi(strings.TrimSpace(sqlText(values[idIndex])))
+		if err != nil || id <= 0 {
+			return UnconfiguredResult{}, fmt.Errorf("неверный ContractID %q в without_parameters_sql", sqlText(values[idIndex]))
+		}
+		item := ListItem{ID: id, Values: make(map[string]string, len(names)), Raw: make(map[string]any, len(names))}
+		for i, name := range names {
+			item.Values[name] = sqlText(values[i])
+			if bytes, ok := values[i].([]byte); ok {
+				item.Raw[name] = append([]byte(nil), bytes...)
+			} else {
+				item.Raw[name] = values[i]
+			}
+		}
+		result.Items = append(result.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return UnconfiguredResult{}, err
+	}
+	return result, nil
+}
