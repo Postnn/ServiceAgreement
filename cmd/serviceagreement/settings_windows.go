@@ -170,29 +170,41 @@ func (a *application) openSettings() {
 	err := Dialog{
 		AssignTo: &dlg, Title: "Настройки ServiceAgreement — SQL Server",
 		MinSize: Size{Width: 790, Height: 600}, Size: Size{Width: 1020, Height: 760},
-		Layout: VBox{Margins: Margins{Left: 14, Top: 12, Right: 14, Bottom: 12}, Spacing: 8},
+		Layout: VBox{Margins: Margins{Left: 14, Top: 12, Right: 14, Bottom: 12}, Spacing: 6},
 		Children: []Widget{
-			Label{Text: "Строка подключения к SQL Server:"},
+			// Zero nested margins: Walk's default HBox padding otherwise creates
+			// uneven vertical gaps of 18 px around every settings row.
+			Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
+				Label{Text: "Строка подключения к SQL Server:"},
+				HSpacer{},
+				PushButton{Text: "Проверить подключение", OnClicked: onTest},
+			}},
 			LineEdit{AssignTo: &connection, Text: cfg.ConnectionString},
-			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-				Label{Text: "Макс. строк списка:"}, LineEdit{AssignTo: &listLimit, Text: strconv.Itoa(cfg.ListLimit), MaxLength: 5},
-				Label{Text: "Макс. совпадений справочника:"}, LineEdit{AssignTo: &lookupLimit, Text: strconv.Itoa(cfg.LookupLimit), MaxLength: 5},
-                PushButton{Text: "Проверить подключение", OnClicked: onTest},
-            }},
-            Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-                Label{Text: "Таймаут выполнения SQL-запросов (сек.):"},
-                LineEdit{AssignTo: &connectionTimeout, Text: strconv.Itoa(cfg.ConnectionTimeoutSeconds), MaxLength: 4},
-                HSpacer{},
-            }},
+			// Fixed widths keep number inputs compact, consistent and readable.
+			// 76 logical pixels fit at least four decimal digits plus padding
+			// (list_limit=1000, lookup_limit=500, timeout up to 3600).
+			Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
+				Label{Text: "Макс. строк списка:"},
+				LineEdit{AssignTo: &listLimit, Text: strconv.Itoa(cfg.ListLimit), MaxLength: 5,
+					MinSize: Size{Width: 76}, MaxSize: Size{Width: 76}},
+				Label{Text: "Макс. совпадений справочника:"},
+				LineEdit{AssignTo: &lookupLimit, Text: strconv.Itoa(cfg.LookupLimit), MaxLength: 5,
+					MinSize: Size{Width: 76}, MaxSize: Size{Width: 76}},
+				Label{Text: "Таймаут SQL (сек.):"},
+				LineEdit{AssignTo: &connectionTimeout, Text: strconv.Itoa(cfg.ConnectionTimeoutSeconds), MaxLength: 4,
+					MinSize: Size{Width: 76}, MaxSize: Size{Width: 76},
+					ToolTipText: "Таймаут выполнения SQL-запросов: от 1 до 3600 секунд"},
+				HSpacer{},
+			}},
 			Label{Text: "Редактирование SQL-запросов — выберите назначение, затем изменяйте текст:"},
-			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
+			Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
 				ComboBox{AssignTo: &sqlPicker, Model: sqlNames, CurrentIndex: 0, OnCurrentIndexChanged: onSQLChanged},
 				PushButton{Text: "Форматировать SQL", OnClicked: formatCurrentSQL},
 			}},
 			TextEdit{AssignTo: &sqlEdit, Text: sqlTextForEditor(cfg.ListSQL), VScroll: true, HScroll: true,
 				Font: Font{Family: "Consolas", PointSize: 10}},
 			Label{Text: "SQL-параметры @search, @limit, @selected, @id и параметры записи описаны в README. Порядок SELECT для одной записи важен."},
-			Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
+			Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
 				PushButton{Text: "Колонки списка…", OnClicked: func() {
 					commitCurrentSQL()
 					cfg.ConnectionString = strings.TrimSpace(connection.Text())
