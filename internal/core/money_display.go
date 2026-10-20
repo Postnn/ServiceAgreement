@@ -91,3 +91,23 @@ func SQLDisplayValue(value any, dbType, alias string) string {
     }
     return sqlText(value)
 }
+
+
+// ParseMoneyEditorText accepts Russian N2 input ("1 234,56", with nonbreaking
+// spaces) as well as SQL-style decimal input. The database still receives
+// canonical money(4) values, never a locale-formatted string.
+func ParseMoneyEditorText(input string) (string, error) {
+    s := strings.TrimSpace(input)
+    s = strings.NewReplacer(" ", "", "\u00a0", "", "\u202f", "", "\t", "", ",", ".").Replace(s)
+    return NormalizeMoney(s)
+}
+
+// MoneyValueFromEditor preserves SQL money's four-decimal precision when the
+// user changes only unrelated fields. Merely displaying the original as N2
+// must not round its stored value on Save.
+func MoneyValueFromEditor(input, displayedOriginal, exactOriginal string) (string, error) {
+    if strings.TrimSpace(input)==displayedOriginal {
+        return NormalizeMoney(exactOriginal)
+    }
+    return ParseMoneyEditorText(input)
+}
