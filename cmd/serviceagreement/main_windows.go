@@ -429,7 +429,11 @@ func (a *application) addFromWithout() {
 		DocumentsCode: 99, PaymentCode: 99, DisconnectCode: 99, Amount: "0.0000",
 	}
 	// Contract is preselected and locked for this specific agreement.
-	label := a.withoutModel.items[idx].Field("ContractName")
+	label := a.withoutModel.items[idx].Field("Договор")
+    if label == "" {
+        // Older custom queries may still return the previous alias.
+        label = a.withoutModel.items[idx].Field("ContractName")
+    }
 	if label == "" {
 		for _, col := range a.withoutModel.columns {
 			if !strings.EqualFold(col.Field, "ContractID") {

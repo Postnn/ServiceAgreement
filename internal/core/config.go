@@ -90,7 +90,7 @@ type Config struct {
 
 const listProjection = `SELECT TOP (@limit)
     t.[КодДокументаДоговораОказанияУслуг] AS ContractID,
-    CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) AS AgreementLabel,
+    CONVERT(nvarchar(max), d.[Договор]) AS AgreementLabel,
     t.[ПериодОказанияУслуги] AS ServicePeriod,
     CASE t.[ПериодОказанияУслуги]
          WHEN 1 THEN N'Один месяц (1)'
@@ -127,12 +127,32 @@ const listProjection = `SELECT TOP (@limit)
          ELSE N'через ' + CONVERT(nvarchar(20), ABS(CONVERT(bigint, t.[ДеньМесяцаОтключенияУслуги])) / 100) + N' мес., ' END +
     CASE WHEN ABS(CONVERT(bigint, t.[ДеньМесяцаОтключенияУслуги])) % 100 = 99 THEN N'последний день месяца'
          ELSE CONVERT(nvarchar(2), ABS(CONVERT(bigint, t.[ДеньМесяцаОтключенияУслуги])) % 100) + N'-е число' END AS DisconnectText
-FROM dbo.[ДокументыДоговораОказанияУслуг] AS t`
+FROM dbo.[ДокументыДоговораОказанияУслуг] AS t
+LEFT JOIN dbo.[ДокументыДанные] AS d
+    ON d.[КодДокумента] = t.[КодДокументаДоговораОказанияУслуг]`
 
 // Default candidate list. Adapt dbo.ДокументыДанные to the actual
 // service-agreement type and name schema in the SQL settings. ContractID is
 // required, every other SELECT field is displayed by the application.
 const defaultWithoutParametersSQL = `SELECT TOP (@limit)
+    d.[КодДокумента] AS ContractID,
+    CONVERT(nvarchar(max), d.[Договор]) AS [Договор]
+FROM dbo.[ДокументыДанные] AS d
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM dbo.[ДокументыДоговораОказанияУслуг] AS p
+    WHERE p.[КодДокументаДоговораОказанияУслуг] = d.[КодДокумента]
+)
+AND (
+    @search = N'' OR
+    CONVERT(nvarchar(30), d.[КодДокумента]) LIKE N'%' + @search + N'%' OR
+    CONVERT(nvarchar(max), d.[Договор]) LIKE N'%' + @search + N'%'
+)
+ORDER BY d.[КодДокумента] DESC`
+
+// Previous factory SQL is kept for migrating unmodified templates only.
+// SQL queries edited by users are never changed by migration.
+const legacyWithoutParametersSQL = `SELECT TOP (@limit)
     d.[КодДокумента] AS ContractID,
     CONVERT(nvarchar(30), d.[КодДокумента]) AS ContractName
 FROM dbo.[ДокументыДанные] AS d
@@ -145,6 +165,24 @@ AND (
     @search = N'' OR
     CONVERT(nvarchar(30), d.[КодДокумента]) LIKE N'%' + @search + N'%'
 )
+ORDER BY d.[КодДокумента] DESC`
+
+const defaultContractsSQL = `SELECT TOP (@limit)
+    d.[КодДокумента] AS ContractID,
+    CONVERT(nvarchar(max), d.[Договор]) AS ContractLabel
+FROM dbo.[ДокументыДанные] AS d
+WHERE
+    @search = N'' OR
+    d.[КодДокумента] = @selected OR
+    CONVERT(nvarchar(30), d.[КодДокумента]) LIKE N'%' + @search + N'%' OR
+    CONVERT(nvarchar(max), d.[Договор]) LIKE N'%' + @search + N'%'
+ORDER BY d.[КодДокумента] DESC`
+
+const legacyContractsSQL = `SELECT TOP (@limit)
+ d.[КодДокумента] AS ContractID,
+ CONVERT(nvarchar(30),d.[КодДокумента]) AS ContractLabel
+FROM dbo.[ДокументыДанные] AS d
+WHERE @search = N'' OR CONVERT(nvarchar(30),d.[КодДокумента]) LIKE N'%' + @search + N'%' OR d.[КодДокумента] = @selected
 ORDER BY d.[КодДокумента] DESC`
 
 const defaultGetSQL = `SELECT
@@ -197,7 +235,9 @@ func DefaultConfig() Config {
 		ListSQL: listProjection + `
 ORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC`,
 		SearchSQL: listProjection + `
-WHERE CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%'
+WHERE
+    CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%' OR
+    CONVERT(nvarchar(max), d.[Договор]) LIKE N'%' + @search + N'%'
 ORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC`,
 		ListColumns: []ListColumn{
 			{Field: "ContractID", Title: "Код договора", Width: 120, Order: 1, SortField: "ContractID", Visible: true},
@@ -218,12 +258,7 @@ ORDER BY t.[КодДокументаДоговораОказанияУслуг] 
 			{Field: "PaymentCode", Title: "Оплата (XDD)", Width: 160, Order: 14, SortField: "PaymentCode", Visible: false},
 			{Field: "DisconnectCode", Title: "Отключение (XDD)", Width: 170, Order: 15, SortField: "DisconnectCode", Visible: false},
 		},
-		ContractsSQL: `SELECT TOP (@limit)
- d.[КодДокумента] AS ContractID,
- CONVERT(nvarchar(30),d.[КодДокумента]) AS ContractLabel
-FROM dbo.[ДокументыДанные] AS d
-WHERE @search = N'' OR CONVERT(nvarchar(30),d.[КодДокумента]) LIKE N'%' + @search + N'%' OR d.[КодДокумента] = @selected
-ORDER BY d.[КодДокумента] DESC`,
+		ContractsSQL: defaultContractsSQL,
 		DocumentTypesSQL: `SELECT TOP (@limit)
  t.[КодТипаДокумента] AS TypeID,
  CONVERT(nvarchar(30),t.[КодТипаДокумента]) AS TypeLabel
@@ -322,6 +357,30 @@ func ValidateColumns(cols []ListColumn) error {
 
 // LoadConfig supplies defaults for new fields when reading an older config.json.
 // Existing SQL connection and user-edited queries are never overwritten.
+// Replace only byte-identical factory SQL from earlier versions.
+// The updated SQL stays in memory until the user saves settings.
+func upgradeFactoryAgreementQueries(c *Config) {
+    if c.WithoutParametersSQL == legacyWithoutParametersSQL {
+        c.WithoutParametersSQL = defaultWithoutParametersSQL
+    }
+    if c.ContractsSQL == legacyContractsSQL {
+        c.ContractsSQL = defaultContractsSQL
+    }
+    legacyProjection := strings.Replace(listProjection,
+        "CONVERT(nvarchar(max), d.[Договор]) AS AgreementLabel,",
+        "CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) AS AgreementLabel,", 1)
+    legacyProjection = strings.Replace(legacyProjection,
+        "\nLEFT JOIN dbo.[ДокументыДанные] AS d\n    ON d.[КодДокумента] = t.[КодДокументаДоговораОказанияУслуг]", "", 1)
+    const ordering = "\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC"
+    if c.ListSQL == legacyProjection + ordering {
+        c.ListSQL = listProjection + ordering
+    }
+    oldSearch := legacyProjection + "\nWHERE CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%'" + ordering
+    if c.SearchSQL == oldSearch {
+        c.SearchSQL = listProjection + "\nWHERE\n    CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%' OR\n    CONVERT(nvarchar(max), d.[Договор]) LIKE N'%' + @search + N'%'" + ordering
+    }
+}
+
 func LoadConfig(path string) (Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -341,6 +400,7 @@ func LoadConfig(path string) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("лишние данные после JSON: %w", err)
 	}
+	upgradeFactoryAgreementQueries(&c)
 	// Column settings added in v4; old columns were always visible and in array order.
 	for i := range c.ListColumns {
 		if c.ListColumns[i].Order == -1 {

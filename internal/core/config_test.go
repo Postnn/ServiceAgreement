@@ -166,3 +166,60 @@ func TestUnconfiguredSQLSettings(t *testing.T) {
 		t.Fatalf("SQL query text lost during save/load: %v, %q", err, roundTrip.WithoutParametersSQL)
 	}
 }
+
+func TestAgreementNameQueriesAndFactoryMigration(t *testing.T) {
+    cfg := DefaultConfig()
+    cfg.ConnectionString = "sqlserver://example?database=db"
+    if !strings.Contains(cfg.WithoutParametersSQL, "d.[КодДокумента] AS ContractID") ||
+        !strings.Contains(cfg.WithoutParametersSQL, "d.[Договор]) AS [Договор]") ||
+        strings.Count(cfg.WithoutParametersSQL, "d.[Договор]") < 2 ||
+        !strings.Contains(cfg.WithoutParametersSQL, "NOT EXISTS") {
+        t.Fatalf("second list must return contract code/name and search by both: %s", cfg.WithoutParametersSQL)
+    }
+    if !strings.Contains(cfg.ContractsSQL, "d.[Договор]) AS ContractLabel") ||
+       !strings.Contains(cfg.ContractsSQL, "@selected") ||
+       !strings.Contains(cfg.ContractsSQL, "d.[Договор]) LIKE") {
+       t.Fatalf("contract dropdown must show/search true contract name: %s", cfg.ContractsSQL)
+    }
+    if !strings.Contains(cfg.ListSQL, "d.[Договор]) AS AgreementLabel") ||
+       !strings.Contains(cfg.ListSQL, "LEFT JOIN dbo.[ДокументыДанные] AS d") ||
+       !strings.Contains(cfg.SearchSQL, "d.[Договор]) LIKE") {
+       t.Fatal("configured list must show and search the name")
+    }
+    path := filepath.Join(t.TempDir(), "config.json")
+    old := cfg
+    old.WithoutParametersSQL = legacyWithoutParametersSQL
+    old.ContractsSQL = legacyContractsSQL
+    oldProjection := strings.Replace(listProjection,
+        "CONVERT(nvarchar(max), d.[Договор]) AS AgreementLabel,",
+        "CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) AS AgreementLabel,", 1)
+    oldProjection = strings.Replace(oldProjection,
+        "\nLEFT JOIN dbo.[ДокументыДанные] AS d\n    ON d.[КодДокумента] = t.[КодДокументаДоговораОказанияУслуг]", "", 1)
+    old.ListSQL = oldProjection + "\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC"
+    old.SearchSQL = oldProjection + "\nWHERE CONVERT(nvarchar(30), t.[КодДокументаДоговораОказанияУслуг]) LIKE N'%' + @search + N'%'" + "\nORDER BY t.[КодДокументаДоговораОказанияУслуг] DESC"
+    if err := SaveConfig(path, old); err != nil {t.Fatal(err)}
+    newcfg, err := LoadConfig(path)
+    if err != nil {t.Fatal(err)}
+    if newcfg.WithoutParametersSQL != cfg.WithoutParametersSQL || 
+       newcfg.ContractsSQL != cfg.ContractsSQL ||
+       newcfg.ListSQL != cfg.ListSQL || newcfg.SearchSQL != cfg.SearchSQL {
+       t.Fatal("old untouched factory queries were not migrated")
+    }
+    raw, err := os.ReadFile(path)
+    if err != nil || !strings.Contains(string(raw), "CONVERT(nvarchar(30),d.[КодДокумента]) AS ContractLabel") {
+       t.Fatal("migration must not rewrite disk config without Save")
+    }
+    custom := cfg
+    custom.WithoutParametersSQL = "SELECT ContractID, Title FROM CustomView WHERE Title LIKE @search"
+    custom.ContractsSQL = "SELECT Code, Name FROM CustomLookup"
+    custom.ListSQL = "SELECT ContractID FROM CustomList"
+    custom.SearchSQL = "SELECT ContractID FROM CustomList WHERE Title LIKE @search"
+    if err := SaveConfig(path, custom); err != nil {t.Fatal(err)}
+    loaded, err := LoadConfig(path)
+    if err != nil {t.Fatal(err)}
+    if loaded.WithoutParametersSQL != custom.WithoutParametersSQL ||
+       loaded.ContractsSQL != custom.ContractsSQL ||
+       loaded.ListSQL != custom.ListSQL || loaded.SearchSQL != custom.SearchSQL {
+        t.Fatal("migration overwrote user SQL")
+    }
+}
