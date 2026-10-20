@@ -14,8 +14,8 @@ func TestDefaultConfigurationAndColumns(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if len(SQLFields) != 8 {
-		t.Fatalf("want 8 editable SQL queries; got %d", len(SQLFields))
+	if len(SQLFields) != 9 {
+		t.Fatalf("want 9 editable SQL queries; got %d", len(SQLFields))
 	}
 	for i, field := range SQLFields {
 		if ptr := c.SQLAt(i); ptr == nil || strings.TrimSpace(*ptr) == "" {
@@ -72,7 +72,7 @@ func TestSaveLoadConfigAndBackwardCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if oldConfig.ListSQL != "SELECT 1" || oldConfig.SearchSQL == "" || oldConfig.GetSQL == "" || len(oldConfig.ListColumns) == 0 {
+	if oldConfig.ListSQL != "SELECT 1" || oldConfig.SearchSQL == "" || oldConfig.WithoutParametersSQL == "" || oldConfig.GetSQL == "" || len(oldConfig.ListColumns) == 0 {
 		t.Fatalf("backwards migration: %+v", oldConfig)
 	}
 }
@@ -137,5 +137,32 @@ func TestDefaultQueriesProjectAllDisplayedColumns(t *testing.T) {
 				t.Fatalf("default SQL does not project %q", field)
 			}
 		}
+	}
+}
+
+func TestUnconfiguredSQLSettings(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ConnectionString = "sqlserver://test"
+	if !strings.Contains(cfg.WithoutParametersSQL, "NOT EXISTS") ||
+		!strings.Contains(cfg.WithoutParametersSQL, "@search") ||
+		!strings.Contains(cfg.WithoutParametersSQL, "ContractID") {
+		t.Fatalf("default unconfigured SQL is incomplete: %s", cfg.WithoutParametersSQL)
+	}
+	if len(SQLFields) != 9 || SQLFields[2].Key != "without_parameters_sql" ||
+		cfg.SQLAt(2) == nil || *cfg.SQLAt(2) != cfg.WithoutParametersSQL {
+		t.Fatal("new query must appear as a separate editable SQL setting")
+	}
+	cfg.WithoutParametersSQL = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("missing without_parameters_sql was accepted")
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg = DefaultConfig()
+	cfg.ConnectionString = "sqlserver://test"
+	cfg.WithoutParametersSQL = "SELECT\n ContractID, ContractName FROM MyAgreements\nWHERE SearchText = @search"
+	if err := SaveConfig(path, cfg); err != nil { t.Fatal(err) }
+	roundTrip, err := LoadConfig(path)
+	if err != nil || roundTrip.WithoutParametersSQL != cfg.WithoutParametersSQL {
+		t.Fatalf("SQL query text lost during save/load: %v, %q", err, roundTrip.WithoutParametersSQL)
 	}
 }
