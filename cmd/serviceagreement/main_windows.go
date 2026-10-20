@@ -429,7 +429,16 @@ func (a *application) addFromWithout() {
 		DocumentsCode: 99, PaymentCode: 99, DisconnectCode: 99, Amount: "0.0000",
 	}
 	// Contract is preselected and locked for this specific agreement.
-	if a.editWithContract(r, false, true) { a.refreshBoth() }
+	label := a.withoutModel.items[idx].Field("ContractName")
+	if label == "" {
+		for _, col := range a.withoutModel.columns {
+			if !strings.EqualFold(col.Field, "ContractID") {
+				label = a.withoutModel.items[idx].Field(col.Field)
+				break
+			}
+		}
+	}
+	if a.editWithContract(r, false, true, label) { a.refreshBoth() }
 }
 
 func intText(n int) string { return strconv.Itoa(n) }
