@@ -24,6 +24,7 @@ type tableModel struct {
     allItems []core.ListItem // all SQL rows fetched (up to list_limit)
     columns  []core.ListColumn
     filters  core.ColumnFilterState
+    conditions core.FilterConditionState
 }
 
 func (m *tableModel) RowCount() int { return len(m.items) }
@@ -36,10 +37,12 @@ func (m *tableModel) Value(row, col int) interface{} {
 func (m *tableModel) replace(rows []core.ListItem) {
     m.allItems = rows
     if m.filters == nil { m.filters = make(core.ColumnFilterState) }
+    if m.conditions == nil { m.conditions = make(core.FilterConditionState) }
     m.applyFilters()
 }
 func (m *tableModel) applyFilters() {
-    m.items = m.filters.Apply(m.allItems)
+    selected := m.filters.Apply(m.allItems)
+    m.items = m.conditions.Apply(selected)
     m.PublishRowsReset()
 }
 
@@ -228,6 +231,7 @@ func (a *application) applyColumns(cols []core.ListColumn) error {
 	}
 	a.model.columns = core.VisibleColumns(cols)
     a.model.filters.KeepFields(a.model.columns)
+    a.model.conditions.KeepFields(a.model.columns)
 	a.sortField, a.sortDescending = "", false
 	for _, col := range a.model.columns {
 		c := walk.NewTableViewColumn()
@@ -407,6 +411,7 @@ func (a *application) applyUnconfiguredColumns(names []string) error {
 	if err := a.withoutTable.Columns().Clear(); err != nil { return err }
 	a.withoutModel.columns = cols
     a.withoutModel.filters.KeepFields(cols)
+    a.withoutModel.conditions.KeepFields(cols)
 	a.withoutSortField, a.withoutSortDescending = "", false
 	for _, col := range cols {
 		c := walk.NewTableViewColumn()

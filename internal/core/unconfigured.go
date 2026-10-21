@@ -58,9 +58,13 @@ func (s Store) ListUnconfigured(ctx context.Context, search string) (Unconfigure
 		return UnconfiguredResult{}, err
 	}
     moneyType := make([]string, len(names))
+    columnTypes := make(map[string]string,len(names))
     if types, err := rows.ColumnTypes(); err == nil {
         for i, typ := range types {
-            if i < len(moneyType) { moneyType[i] = typ.DatabaseTypeName() }
+            if i < len(moneyType) {
+                moneyType[i] = typ.DatabaseTypeName()
+                columnTypes[names[i]] = moneyType[i]
+            }
         }
     }
 	if _, err := columnNames(names); err != nil {
@@ -87,7 +91,7 @@ func (s Store) ListUnconfigured(ctx context.Context, search string) (Unconfigure
 		if err != nil || id <= 0 {
 			return UnconfiguredResult{}, fmt.Errorf("неверный ContractID %q в without_parameters_sql", sqlText(values[idIndex]))
 		}
-		item := ListItem{ID: id, Values: make(map[string]string, len(names)), Raw: make(map[string]any, len(names))}
+		item := ListItem{ID: id, Values: make(map[string]string, len(names)), Raw: make(map[string]any, len(names)), ColumnTypes: columnTypes}
 		for i, name := range names {
 			item.Values[name] = SQLDisplayValue(values[i], moneyType[i], name)
 			if bytes, ok := values[i].([]byte); ok {

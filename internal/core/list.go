@@ -91,10 +91,12 @@ func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
 		return nil, err
 	}
     moneyType := make([]string, len(names))
+    columnTypes := make(map[string]string,len(names))
     if types, err := rows.ColumnTypes(); err == nil {
         for i, typ := range types {
             if i < len(moneyType) {
                 moneyType[i] = typ.DatabaseTypeName()
+                columnTypes[names[i]] = moneyType[i]
             }
         }
     }
@@ -118,7 +120,7 @@ func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
 		if err != nil || id <= 0 {
 			return nil, fmt.Errorf("неверный ContractID %q", idText)
 		}
-		item := ListItem{ID: id, Values: make(map[string]string, len(names)), Raw: make(map[string]any, len(names))}
+		item := ListItem{ID: id, Values: make(map[string]string, len(names)), Raw: make(map[string]any, len(names)), ColumnTypes: columnTypes}
 		for i, name := range names {
 			item.Values[name] = SQLDisplayValue(values[i], moneyType[i], name)
 			// The data stays fully SQL-sourced; []byte is copied because sql.Rows may reuse it.

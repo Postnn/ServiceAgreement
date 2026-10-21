@@ -182,3 +182,43 @@ func TestBulkCheckboxSelectionRedrawsVisibleRows(t *testing.T) {
         t.Fatal("search-scoped toggle affected unrelated checkboxes")
     }
 }
+
+func TestExcelStyleTypedMenuOperators(t *testing.T) {
+    want:=map[core.FilterKind][]core.FilterOperator{
+        core.FilterText:{
+            core.FilterEqual,core.FilterNotEqual,
+            core.FilterContains,core.FilterNotContains,
+            core.FilterStarts,core.FilterEnds,
+        },
+        core.FilterNumber:{
+            core.FilterEqual,core.FilterNotEqual,
+            core.FilterGreater,core.FilterGreaterEqual,
+            core.FilterLess,core.FilterLessEqual,
+            core.FilterBetween,core.FilterNotBetween,
+            core.FilterTop,core.FilterAboveAverage,core.FilterBelowAverage,
+        },
+        core.FilterDate:{
+            core.FilterEqual,core.FilterNotEqual,
+            core.FilterGreater,core.FilterGreaterEqual,
+            core.FilterLess,core.FilterLessEqual,
+            core.FilterBetween,core.FilterNotBetween,
+        },
+    }
+    for kind,operators:=range want {
+        menu:=conditionOperators(kind)
+        if len(menu)!=len(operators) {
+            t.Fatalf("%s expected %d operators, got %d",kind,len(operators),len(menu))
+        }
+        for i,op:=range operators {
+            if menu[i].Operator!=op || menu[i].Caption=="" {
+                t.Errorf("%s menu item %d: got %+v, expected %s",kind,i,menu[i],op)
+            }
+            if filterOperatorIndex(menu,op)!=i {
+                t.Errorf("%s wrong index for %s",kind,op)
+            }
+        }
+        if filterKindCaption(kind)=="" || filterKindInputExample(kind)=="" {
+            t.Errorf("%s missing Russian UI labels",kind)
+        }
+    }
+}

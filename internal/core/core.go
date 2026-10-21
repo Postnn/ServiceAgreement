@@ -15,9 +15,10 @@ import (
 )
 
 type ListItem struct {
-	ID     int
-	Values map[string]string
-	Raw    map[string]any // original SQL types, used only for click-to-sort
+    ID int
+    Values map[string]string
+    Raw map[string]any // original SQL values for sorting and typed filtering
+    ColumnTypes map[string]string // SQL Server DatabaseTypeName by alias
 }
 
 type Option struct {
