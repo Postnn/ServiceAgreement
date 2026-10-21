@@ -105,5 +105,6 @@ func (s Store) ListUnconfigured(ctx context.Context, search string) (Unconfigure
 	if err := rows.Err(); err != nil {
 		return UnconfiguredResult{}, err
 	}
+    FormatListMoneyN2(result.Items)
 	return result, nil
 }

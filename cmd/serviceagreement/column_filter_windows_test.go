@@ -457,3 +457,46 @@ func TestFilterPopupModeRepeatedSelectionNeverGrows(t *testing.T) {
         t.Fatalf("switch from initially compact mode: %d changed=%v",height,changed)
     }
 }
+
+
+func TestMoneyColumnAndUniqueValuesAreRightAligned(t *testing.T) {
+    // A user-defined SQL alias may have no type until the first query.
+    // Monetary columns should start right-aligned, then remain aligned by
+    // the numeric type inferred from SQL values.
+    configured:=[]core.ListColumn{
+        {Field:"Договор",Title:"Договор",Width:230,Order:1,SortField:"Договор",Visible:true},
+        {Field:"Абон.плата",Title:"Абон.плата",Width:145,Order:2,SortField:"Абон.плата",Visible:true},
+    }
+    columns:=tableColumns(configured)
+    if len(columns)!=2 {
+        t.Fatalf("wrong column count: %+v",columns)
+    }
+    if columns[0].Alignment!=AlignNear || columns[1].Alignment!=AlignFar {
+        t.Fatalf("numeric money column should align right: %+v",columns)
+    }
+    for _,tc:=range []struct{kind core.FilterKind; want Alignment1D}{
+        {core.FilterText,AlignNear},
+        {core.FilterDate,AlignNear},
+        {core.FilterNumber,AlignFar},
+    } {
+        if actual:=filterValueAlignment(tc.kind);actual!=tc.want {
+            t.Fatalf("unique-values alignment for %v = %v, expected %v",tc.kind,actual,tc.want)
+        }
+    }
+    rows:=[]core.ListItem{
+        {ID:1,Values:map[string]string{"Абон.плата":"0.0000"},
+            Raw:map[string]any{"Абон.плата":[]byte("0.0000")},
+            ColumnTypes:map[string]string{"Абон.плата":"NVARCHAR"}},
+        {ID:2,Values:map[string]string{"Абон.плата":"1150.2400"},
+            Raw:map[string]any{"Абон.плата":[]byte("1150.2400")},
+            ColumnTypes:map[string]string{"Абон.плата":"NVARCHAR"}},
+    }
+    if kind:=core.DetectFilterKind(rows,"Абон.плата");kind!=core.FilterNumber {
+        t.Fatalf("Russian alias must trigger numeric filter, got %q",kind)
+    }
+    core.FormatListMoneyN2(rows)
+    menu:=core.ColumnValues(rows,"Абон.плата")
+    if len(menu)!=2 || menu[0].Value!="0,00" || menu[1].Value!="1\u00a0150,24" {
+        t.Fatalf("filter checklist values are not formatted in N2: %v",menu)
+    }
+}

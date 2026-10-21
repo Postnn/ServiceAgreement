@@ -12,27 +12,24 @@ import (
     "github.com/Postnn/ServiceAgreement/internal/core"
 )
 
-// filterOperandCaptions corresponds to the operator, not a permanent "Second
-// boundary" column heading. Outside a range means x < From OR x > To.
-// Between includes its boundaries. Other operations have one operand only.
+// Captions are written for people rather than as mathematical shorthand.
+// Every visible caption ends with a colon, including range boundaries.
 func filterOperandCaptions(kind core.FilterKind, operator core.FilterOperator) (first, second string) {
     switch operator {
-    case core.FilterBetween:
-        return "≥ От", "≤ По"
-    case core.FilterNotBetween:
-        return "< От", "> По"
-    case core.FilterAboveAverage, core.FilterBelowAverage:
+    case core.FilterBetween,core.FilterNotBetween:
+        if kind==core.FilterDate {
+            return "Дата начала:", "Дата окончания:"
+        }
+        return "От:", "До:"
+    case core.FilterAboveAverage,core.FilterBelowAverage:
         return "", ""
     case core.FilterTop:
-        return "Кол-во", ""
+        return "Количество:", ""
     }
     switch kind {
-    case core.FilterDate:
-        return "Дата", ""
-    case core.FilterNumber:
-        return "Число", ""
-    default:
-        return "Текст", ""
+    case core.FilterDate:return "Дата:", ""
+    case core.FilterNumber:return "Число:", ""
+    default:return "Текст:", ""
     }
 }
 

@@ -16,15 +16,15 @@ func TestNativeFilterInputCaptionsAndRangeSemantics(t *testing.T) {
         op core.FilterOperator
         first,second string
     }{
-        {core.FilterDate,core.FilterBetween,"≥ От","≤ По"},
-        {core.FilterDate,core.FilterNotBetween,"< От","> По"},
-        {core.FilterNumber,core.FilterBetween,"≥ От","≤ По"},
-        {core.FilterNumber,core.FilterNotBetween,"< От","> По"},
-        {core.FilterDate,core.FilterEqual,"Дата",""},
-        {core.FilterText,core.FilterContains,"Текст",""},
-        {core.FilterNumber,core.FilterGreater,"Число",""},
+        {core.FilterDate,core.FilterBetween,"Дата начала:","Дата окончания:"},
+        {core.FilterDate,core.FilterNotBetween,"Дата начала:","Дата окончания:"},
+        {core.FilterNumber,core.FilterBetween,"От:","До:"},
+        {core.FilterNumber,core.FilterNotBetween,"От:","До:"},
+        {core.FilterDate,core.FilterEqual,"Дата:",""},
+        {core.FilterText,core.FilterContains,"Текст:",""},
+        {core.FilterNumber,core.FilterGreater,"Число:",""},
         {core.FilterNumber,core.FilterAboveAverage,"",""},
-        {core.FilterNumber,core.FilterTop,"Кол-во",""},
+        {core.FilterNumber,core.FilterTop,"Количество:",""},
     }
     for _,tc:=range cases {
         first,second:=filterOperandCaptions(tc.kind,tc.op)
@@ -33,8 +33,8 @@ func TestNativeFilterInputCaptionsAndRangeSemantics(t *testing.T) {
         }
     }
     hints:=[]struct{op core.FilterOperator;expect []string}{
-        {core.FilterBetween,[]string{"Больше или равно От","Меньше или равно По"}},
-        {core.FilterNotBetween,[]string{"Меньше От","Больше По"}},
+        {core.FilterBetween,[]string{"с начала по окончание периода","Обе даты включены"}},
+        {core.FilterNotBetween,[]string{"до начала периода","после его окончания","не входят"}},
     }
     for _,tc:=range hints {
         text:=filterRangeExplanation(core.FilterDate,tc.op,"")
@@ -118,5 +118,35 @@ func TestNativeNumberEditValueExtraction(t *testing.T) {
         !filterNeedsBoundary(core.FilterBetween) ||
         !filterNeedsBoundary(core.FilterNotBetween) {
         t.Fatal("number of native operand controls mismatched operator")
+    }
+}
+
+
+func TestEveryVisibleOperandCaptionEndsWithColon(t *testing.T) {
+    cases:=[]struct {
+        kind core.FilterKind
+        ops []core.FilterOperator
+    }{
+        {core.FilterDate, []core.FilterOperator{
+            core.FilterEqual,core.FilterLess,core.FilterGreater,
+            core.FilterBetween,core.FilterNotBetween,
+        }},
+        {core.FilterNumber,[]core.FilterOperator{
+            core.FilterEqual,core.FilterTop,core.FilterBetween,core.FilterNotBetween,
+        }},
+        {core.FilterText,[]core.FilterOperator{
+            core.FilterEqual,core.FilterContains,core.FilterStarts,
+        }},
+    }
+    for _,tc:=range cases {
+        for _,op:=range tc.ops {
+            first,second:=filterOperandCaptions(tc.kind,op)
+            if first!=""&&!strings.HasSuffix(first,":") {
+                t.Errorf("%v %v first caption lacks colon: %q",tc.kind,op,first)
+            }
+            if second!=""&&!strings.HasSuffix(second,":") {
+                t.Errorf("%v %v second caption lacks colon: %q",tc.kind,op,second)
+            }
+        }
     }
 }

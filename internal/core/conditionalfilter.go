@@ -84,38 +84,11 @@ func (s FilterConditionState) KeepFields(columns []ListColumn) {
     for k:=range s { if !known[k] {delete(s,k)} }
 }
 
+// DetectFilterKind uses the same SQL-aware presentation classification as
+// the two list views. In particular, a configured SELECT may cast an amount
+// to NVARCHAR under a Russian alias such as "Абон.плата".
 func DetectFilterKind(rows []ListItem, field string) FilterKind {
-    // The legacy Amount alias is textual SQL but semantically money.
-    if strings.EqualFold(field,"Amount") {return FilterNumber}
-    for _,row:=range rows {
-        for name,dbType:=range row.ColumnTypes {
-            if strings.EqualFold(name,field) {
-                typ:=strings.ToUpper(strings.TrimSpace(dbType))
-                switch typ {
-                case "MONEY","SMALLMONEY","DECIMAL","NUMERIC","FLOAT","REAL",
-                    "TINYINT","SMALLINT","INT","BIGINT","BIT":
-                    return FilterNumber
-                case "DATE","DATETIME","DATETIME2","SMALLDATETIME","DATETIMEOFFSET":
-                    return FilterDate
-                case "VARCHAR","NVARCHAR","CHAR","NCHAR","TEXT","NTEXT",
-                    "UNIQUEIDENTIFIER","XML":
-                    return FilterText
-                }
-            }
-        }
-    }
-    for _,row:=range rows {
-        raw:=row.SQLValue(field)
-        if raw==nil {continue}
-        switch raw.(type) {
-        case time.Time: return FilterDate
-        case int,int8,int16,int32,int64,uint,uint8,uint16,uint32,uint64,
-            float32,float64,*big.Rat,*big.Float,bool:
-            return FilterNumber
-        default: return FilterText
-        }
-    }
-    return FilterText
+    return InferColumnPresentation(rows,field).Kind
 }
 
 func parseNumber(raw any) (*big.Rat,error) {

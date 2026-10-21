@@ -47,11 +47,35 @@ func (m *tableModel) applyFilters() {
 }
 
 func tableColumns(c []core.ListColumn) []TableViewColumn {
-	result := make([]TableViewColumn, 0, len(c))
-	for _, col := range core.VisibleColumns(c) {
-		result = append(result, TableViewColumn{Name: col.Field, Title: filterHeaderTitle(col,false), Width: col.Width})
-	}
-	return result
+    result:=make([]TableViewColumn,0,len(c))
+    for _,col:=range core.VisibleColumns(c) {
+        alignment:=AlignNear
+        // Before the first SQL read, monetary aliases can be recognized.
+        // After loading, all numeric columns are aligned from source values.
+        if core.InferColumnPresentation(nil,col.Field).Money {
+            alignment=AlignFar
+        }
+        result=append(result,TableViewColumn{
+            Name:col.Field,Title:filterHeaderTitle(col,false),
+            Width:col.Width,Alignment:alignment,
+        })
+    }
+    return result
+}
+
+// Right-align SQL numeric columns (including money projected as NVARCHAR).
+// Re-evaluate after every query because custom SELECT aliases and source
+// types may change while list_columns still contains the same fields.
+func applyTypedColumnAlignment(table *walk.TableView, model *tableModel) {
+    if table==nil || model==nil {return}
+    for i,col:=range model.columns {
+        if i>=table.Columns().Len() {break}
+        alignment:=walk.AlignNear
+        if core.InferColumnPresentation(model.allItems,col.Field).Kind==core.FilterNumber {
+            alignment=walk.AlignFar
+        }
+        _=table.Columns().At(i).SetAlignment(alignment)
+    }
 }
 
 type application struct {
@@ -254,6 +278,9 @@ func (a *application) applyColumns(cols []core.ListColumn) error {
 		c := walk.NewTableViewColumn()
 		c.SetName(col.Field)
 		_ = c.SetTitle(filterHeaderTitle(col,a.model.filters.Active(col.Field)))
+        if core.InferColumnPresentation(nil,col.Field).Money {
+            _=c.SetAlignment(walk.AlignFar)
+        }
 		_ = c.SetWidth(col.Width)
 		if err := a.table.Columns().Add(c); err != nil {
 			return err
@@ -341,6 +368,7 @@ func (a *application) refresh() {
 	}
 	core.SortListItems(rows, a.sortField, a.sortDescending)
     a.model.replace(rows)
+    applyTypedColumnAlignment(a.table,a.model)
     a.updateColumnFilterTitles(a.table,a.model)
     a.updateFilteredStatus(false)
 }
@@ -434,6 +462,9 @@ func (a *application) applyUnconfiguredColumns(names []string) error {
 		c := walk.NewTableViewColumn()
 		c.SetName(col.Field)
 		_ = c.SetTitle(filterHeaderTitle(col,a.withoutModel.filters.Active(col.Field)))
+        if core.InferColumnPresentation(nil,col.Field).Money {
+            _=c.SetAlignment(walk.AlignFar)
+        }
 		_ = c.SetWidth(col.Width)
 		if err := a.withoutTable.Columns().Add(c); err != nil { return err }
 	}
@@ -462,6 +493,7 @@ func (a *application) refreshWithout() {
 	}
 	core.SortListItems(result.Items, a.withoutSortField, a.withoutSortDescending)
     a.withoutModel.replace(result.Items)
+    applyTypedColumnAlignment(a.withoutTable,a.withoutModel)
     a.updateColumnFilterTitles(a.withoutTable,a.withoutModel)
     a.updateFilteredStatus(true)
 }

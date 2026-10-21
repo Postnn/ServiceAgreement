@@ -265,6 +265,13 @@ func conditionOperators(kind core.FilterKind) []operatorChoice {
         }
     }
 }
+// Number-based checklists are right-aligned, exactly like the numeric
+// columns in the two tables. The counts column is always numeric.
+func filterValueAlignment(kind core.FilterKind) Alignment1D {
+    if kind==core.FilterNumber {return AlignFar}
+    return AlignNear
+}
+
 func filterKindCaption(kind core.FilterKind) string {
     switch kind {
     case core.FilterNumber:return "Числовой фильтр"
@@ -706,8 +713,8 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                         AlternatingRowBG:true,MultiSelection:false,
                         NotSortableByHeaderClick:true,ColumnsOrderable:false,
                         Columns:[]TableViewColumn{
-                            {Title:"Значение",Width:375},
-                            {Title:"Строк",Width:75},
+                            {Title:"Значение",Width:375,Alignment:filterValueAlignment(kind)},
+                            {Title:"Строк",Width:75,Alignment:AlignFar},
                         },
                     },
                     Label{AssignTo:&selectedLabel,Text:""},

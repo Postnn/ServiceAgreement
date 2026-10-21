@@ -132,5 +132,9 @@ func (s Store) List(ctx context.Context, search string) ([]ListItem, error) {
 		}
 		result = append(result, item)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {return nil,err}
+    // Resolve presentation types only after reading the entire result.
+    // Custom SQL may return CONVERT(nvarchar, money) under any alias.
+    FormatListMoneyN2(result)
+    return result,nil
 }

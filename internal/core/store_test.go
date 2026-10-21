@@ -19,9 +19,10 @@ type fakeSQLState struct {
 }
 type fakeSQLConn struct{ state *fakeSQLState }
 type fakeSQLRows struct {
-	names []string
-	rows  [][]driver.Value
-	index int
+    names []string
+    types []string
+    rows [][]driver.Value
+    index int
 }
 
 func (d fakeSQLDriver) Open(string) (driver.Conn, error) { return &fakeSQLConn{state: d.state}, nil }
@@ -38,6 +39,24 @@ func (c *fakeSQLConn) record(query string, args []driver.NamedValue) {
 func (c *fakeSQLConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	c.record(query, args)
 	switch {
+    case strings.Contains(query,"FROM (\nquery_money_list\n)"):
+        return &fakeSQLRows{
+            names:[]string{"ContractID","Абон.плата","SearchText"},
+            types:[]string{"INT","NVARCHAR","NVARCHAR"},
+            rows:[][]driver.Value{
+                {int64(501),[]byte("2222.0000"),[]byte("501 Контракт")},
+                {int64(502),[]byte("1150.2400"),[]byte("502 Контракт")},
+            },
+        },nil
+    case strings.Contains(query,"FROM (\nquery_unconfigured_money\n)"):
+        return &fakeSQLRows{
+            names:[]string{"ContractID","Абон.плата","SearchText"},
+            types:[]string{"INT","NVARCHAR","NVARCHAR"},
+            rows:[][]driver.Value{
+                {int64(601),[]byte("0.0000"),[]byte("601 Договор")},
+                {int64(602),[]byte("4520.4600"),[]byte("602 Договор")},
+            },
+        },nil
 	case strings.Contains(query, "query_list"):
 		return &fakeSQLRows{
 			names: []string{"ContractID", "CustomColumn", "ServicePeriod", "AutoPay", "PaymentCode", "PaymentText", "SortByHidden", "SearchText"},
@@ -68,6 +87,10 @@ func (c *fakeSQLConn) ExecContext(_ context.Context, query string, args []driver
 	return driver.RowsAffected(c.state.Affected), nil
 }
 func (r *fakeSQLRows) Columns() []string { return r.names }
+func (r *fakeSQLRows) ColumnTypeDatabaseTypeName(index int) string {
+    if index>=0 && index<len(r.types) {return r.types[index]}
+    return ""
+}
 func (r *fakeSQLRows) Close() error      { return nil }
 func (r *fakeSQLRows) Next(dst []driver.Value) error {
 	if r.index >= len(r.rows) {
@@ -221,4 +244,48 @@ func TestUnconfiguredContractsUseConfiguredSQLAndDisplayEveryColumn(t *testing.T
 	if _, err := store.ListUnconfigured(context.Background(), ""); err == nil {
 		t.Fatal("missing ContractID must be rejected before displaying records")
 	}
+}
+
+
+func TestBothListsFormatAliasedMoneyCastAsNVARCHAR(t *testing.T) {
+    state:=&fakeSQLState{}
+    dbName:="serviceAgreementAliasedMoneyListTest"
+    sql.Register(dbName,fakeSQLDriver{state:state})
+    db,err:=sql.Open(dbName,"")
+    if err!=nil {t.Fatal(err)}
+    defer db.Close()
+    cfg:=DefaultConfig()
+    cfg.ListSQL="query_money_list"
+    cfg.WithoutParametersSQL="query_unconfigured_money"
+    cfg.ListColumns=[]ListColumn{
+        {Field:"ContractID",Title:"Код",Width:100,Order:1,SortField:"ContractID",Visible:false},
+        {Field:"Абон.плата",Title:"Абон.плата",Width:150,Order:2,SortField:"Абон.плата",Visible:true},
+        {Field:"SearchText",Title:"SearchText",Width:100,Order:3,SortField:"SearchText",Visible:false},
+    }
+    store:=Store{DB:db,Config:cfg}
+    a,err:=store.List(context.Background(),"")
+    if err!=nil {t.Fatal(err)}
+    if len(a)!=2 || a[0].Field("Абон.плата")!="2\u00a0222,00" ||
+        a[1].Field("Абон.плата")!="1\u00a0150,24" {
+        t.Fatalf("money in list_sql not formatted N2: %+v",a)
+    }
+    if kind:=DetectFilterKind(a,"Абон.плата");kind!=FilterNumber {
+        t.Errorf("aliased money in list_sql appeared as %q filter",kind)
+    }
+    if raw:=sqlText(a[0].SQLValue("Абон.плата"));raw!="2222.0000" {
+        t.Fatalf("original money precision lost: %q",raw)
+    }
+    without,err:=store.ListUnconfigured(context.Background(),"")
+    if err!=nil {t.Fatal(err)}
+    if len(without.Items)!=2 || without.Items[0].Field("Абон.плата")!="0,00" ||
+        without.Items[1].Field("Абон.плата")!="4\u00a0520,46" {
+        t.Fatalf("money in without_parameters_sql not formatted N2: %+v",without)
+    }
+    if kind:=DetectFilterKind(without.Items,"Абон.плата");kind!=FilterNumber {
+        t.Errorf("aliased money in without_parameters_sql appeared as %q filter",kind)
+    }
+    unique:=ColumnValues(without.Items,"Абон.плата")
+    if len(unique)!=2 || unique[0].Value!="0,00" || unique[1].Value!="4\u00a0520,46" {
+        t.Fatalf("unique values popup does not use N2: %+v",unique)
+    }
 }
