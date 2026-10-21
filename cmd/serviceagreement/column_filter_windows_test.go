@@ -385,7 +385,7 @@ func TestFilterDialogFitsCurrentContentMode(t *testing.T) {
     if condition.Width!=checklist.Width {
         t.Fatalf("dialog should keep convenient consistent width: condition=%v unique=%v",condition,checklist)
     }
-    if condition.Width<650 || condition.Width>730 {
+    if condition.Width<710 || condition.Width>770 {
         t.Fatalf("dialog should be wide enough for range controls but not oversized: %v",condition)
     }
     if condition.Height<390 || condition.Height>450 {

@@ -4,6 +4,7 @@ package main
 
 import (
     "fmt"
+    "time"
     "strings"
 
     "github.com/Postnn/ServiceAgreement/internal/core"
@@ -107,7 +108,7 @@ func (m *filterValueModel) selectedValues() map[string]bool {
 // fixed-size dialog leaves empty vertical bands when the checkbox list is
 // hidden, so keep a generous width but shrink only the condition mode.
 const (
-    filterPopupWidth = 680
+    filterPopupWidth = 740
     filterConditionHeight = 405
     filterValueListHeight = 570
 )
@@ -361,9 +362,16 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
     var searchBox *walk.LineEdit
     var selectedLabel *walk.Label
     var modeBox,operationOne,operationTwo *walk.ComboBox
-    var valueOne,valueOneBoundary,valueTwo,valueTwoBoundary *walk.LineEdit
+    var textOne,textTwo *walk.LineEdit
+    var numberOne,numberOneBoundary,numberTwo,numberTwoBoundary *walk.NumberEdit
+    var dateOne,dateOneBoundary,dateTwo,dateTwoBoundary *walk.DateEdit
+    var firstOperandLabel,firstBoundaryLabel,secondOperandLabel,secondBoundaryLabel *walk.Label
     var uniqueGroup,conditionGroup *walk.GroupBox
-    var conditionHint,currentFilterLabel,valueHeader,boundaryHeader *walk.Label
+    var conditionHint,currentFilterLabel *walk.Label
+    numberInputsInitializing:=true
+    updatingNumberPrecision:=false
+    numberOneChanged,numberOneBoundaryChanged:=false,false
+    numberTwoChanged,numberTwoBoundaryChanged:=false,false
 
     textStatus:="Текущий фильтр: не установлен"
     if activeCondition {
@@ -387,34 +395,60 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         if idx<=0 || idx>len(ops) {return "",false}
         return ops[idx-1].Operator,true
     }
-    // Hide irrelevant inputs entirely. Disabled empty grey boxes previously
-    // confused users: a range boundary is only visible for Between/NotBetween,
-    // and the second value appears only with an active second OR operator.
+    // The native widget for each SQL data type is independent. Hidden
+    // controls are excluded from layout; no grey, unusable input remains.
     updateOperation:=func() {
         firstOp,firstActive:=currentFirstOperation()
         secondOp,secondActive:=currentSecondOperation()
-        showFirstValue,showFirstBoundary:=editorInputVisibility(firstOp,firstActive)
-        showSecondValue,showSecondBoundary:=editorInputVisibility(secondOp,secondActive)
-        if valueOne!=nil {valueOne.SetVisible(showFirstValue)}
-        if valueOneBoundary!=nil {valueOneBoundary.SetVisible(showFirstBoundary)}
-        if valueTwo!=nil {valueTwo.SetVisible(showSecondValue)}
-        if valueTwoBoundary!=nil {valueTwoBoundary.SetVisible(showSecondBoundary)}
-        if valueHeader!=nil {
-            valueHeader.SetVisible(showFirstValue || showSecondValue)
+        updateRow:=func(op core.FilterOperator,active bool,
+            text *walk.LineEdit,number,boundaryNumber *walk.NumberEdit,
+            date,boundaryDate *walk.DateEdit,
+            caption,boundaryCaption *walk.Label,
+        ){
+            showValue,showBoundary:=editorInputVisibility(op,active)
+            firstLabel,secondLabel:=filterOperandCaptions(kind,op)
+            if caption!=nil {
+                _=caption.SetText(firstLabel)
+                caption.SetVisible(showValue)
+            }
+            if boundaryCaption!=nil {
+                _=boundaryCaption.SetText(secondLabel)
+                boundaryCaption.SetVisible(showBoundary)
+            }
+            if text!=nil {text.SetVisible(kind==core.FilterText && showValue)}
+            if number!=nil {
+                number.SetVisible(kind==core.FilterNumber && showValue)
+                // Top N is an integer; all other numeric filters allow
+                // SQL money's four-decimal scale.
+                decimals:=4
+                if op==core.FilterTop {decimals=0}
+                if number.Decimals()!=decimals {
+                    updatingNumberPrecision=true
+                    _=number.SetDecimals(decimals)
+                    updatingNumberPrecision=false
+                }
+                if active && op==core.FilterTop && number.Value()==0 {
+                    updatingNumberPrecision=true
+                    _=number.SetValue(10)
+                    updatingNumberPrecision=false
+                }
+            }
+            if date!=nil {date.SetVisible(kind==core.FilterDate && showValue)}
+            if boundaryNumber!=nil {
+                boundaryNumber.SetVisible(kind==core.FilterNumber && showBoundary)
+            }
+            if boundaryDate!=nil {
+                boundaryDate.SetVisible(kind==core.FilterDate && showBoundary)
+            }
         }
-        if boundaryHeader!=nil {
-            boundaryHeader.SetVisible(showFirstBoundary || showSecondBoundary)
-        }
-        if firstActive && firstOp==core.FilterTop && valueOne!=nil &&
-            strings.TrimSpace(valueOne.Text())=="" {
-            _=valueOne.SetText("10")
-        }
-        if secondActive && secondOp==core.FilterTop && valueTwo!=nil &&
-            strings.TrimSpace(valueTwo.Text())=="" {
-            _=valueTwo.SetText("10")
-        }
+        updateRow(firstOp,firstActive,
+            textOne,numberOne,numberOneBoundary,
+            dateOne,dateOneBoundary,firstOperandLabel,firstBoundaryLabel)
+        updateRow(secondOp,secondActive,
+            textTwo,numberTwo,numberTwoBoundary,
+            dateTwo,dateTwoBoundary,secondOperandLabel,secondBoundaryLabel)
         if conditionHint!=nil {
-            conditionHint.SetText("Внутри колонки — ИЛИ; между колонками — И.")
+            conditionHint.SetText(filterRangeExplanation(kind,firstOp,secondOp))
         }
     }
     // Entire unused mode is hidden rather than shown disabled.
@@ -443,6 +477,27 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         if entries!=nil {_=entries.Invalidate()}
     }
 
+    initialValue:=""
+    initialValueBoundary:=""
+    initialSecondValue:=""
+    initialSecondBoundary:=""
+    if activeCondition && previous.Kind==kind {
+        initialValue=previous.Value
+        initialValueBoundary=previous.Value2
+        if previous.Additional!=nil && previous.Additional.Kind==kind {
+            initialSecondValue=previous.Additional.Value
+            initialSecondBoundary=previous.Additional.Value2
+        }
+    }
+    initialDateOne:=filterDateForEditor(initialValue)
+    initialDateOneBoundary:=filterDateForEditor(initialValueBoundary)
+    initialDateTwo:=filterDateForEditor(initialSecondValue)
+    initialDateTwoBoundary:=filterDateForEditor(initialSecondBoundary)
+    initialNumericOne:=filterNumberForEditor(initialValue)
+    initialNumericOneBoundary:=filterNumberForEditor(initialValueBoundary)
+    initialNumericTwo:=filterNumberForEditor(initialSecondValue)
+    initialNumericTwoBoundary:=filterNumberForEditor(initialSecondBoundary)
+
     applyAndClose:=func(clearAll,clearColumn bool) {
         if clearAll {
             model.filters.ClearAll()
@@ -453,6 +508,36 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         }else if modeBox!=nil && modeBox.CurrentIndex()==1 {
             firstOp,firstActive:=currentFirstOperation()
             secondOp,secondActive:=currentSecondOperation()
+            readRow:=func(op core.FilterOperator,second bool) (string,string,error) {
+                if kind==core.FilterText {
+                    v:=""
+                    if second {if textTwo!=nil {v=textTwo.Text()}}
+                    if !second {if textOne!=nil {v=textOne.Text()}}
+                    a,err:=filterEditorOperand(kind,op,filterEditorValue{Text:v})
+                    return a,"",err
+                }
+                readOperand:=func(n *walk.NumberEdit,d *walk.DateEdit,
+                    old string,dirty bool,operator core.FilterOperator)(string,error) {
+                    value:=filterEditorValue{Original:old,NumberEdited:dirty}
+                    if n!=nil {value.Number=n.Value()}
+                    if d!=nil {value.Date=d.Date()}
+                    return filterEditorOperand(kind,operator,value)
+                }
+                if second {
+                    v,err:=readOperand(numberTwo,dateTwo,initialSecondValue,numberTwoChanged,op)
+                    if err!=nil {return "","",err}
+                    if !filterNeedsBoundary(op) {return v,"",nil}
+                    boundary,err:=readOperand(numberTwoBoundary,dateTwoBoundary,
+                        initialSecondBoundary,numberTwoBoundaryChanged,op)
+                    return v,boundary,err
+                }
+                v,err:=readOperand(numberOne,dateOne,initialValue,numberOneChanged,op)
+                if err!=nil {return "","",err}
+                if !filterNeedsBoundary(op) {return v,"",nil}
+                boundary,err:=readOperand(numberOneBoundary,dateOneBoundary,
+                    initialValueBoundary,numberOneBoundaryChanged,op)
+                return v,boundary,err
+            }
             if !firstActive {
                 if secondActive {
                     walk.MsgBox(dlg,"Некорректный фильтр",
@@ -463,9 +548,22 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                 model.conditions.Clear(field)
                 model.filters.Clear(field)
             }else{
+                firstValue,firstBoundary,err:=readRow(firstOp,false)
+                if err!=nil {
+                    walk.MsgBox(dlg,"Некорректное значение",err.Error(),walk.MsgBoxIconError)
+                    return
+                }
+                secondValue,secondBoundary:="",""
+                if secondActive {
+                    secondValue,secondBoundary,err=readRow(secondOp,true)
+                    if err!=nil {
+                        walk.MsgBox(dlg,"Некорректное второе значение",err.Error(),walk.MsgBoxIconError)
+                        return
+                    }
+                }
                 cond,err:=composeORFilter(
-                    kind,firstOp,valueOne.Text(),valueOneBoundary.Text(),
-                    secondActive,secondOp,valueTwo.Text(),valueTwoBoundary.Text(),
+                    kind,firstOp,firstValue,firstBoundary,
+                    secondActive,secondOp,secondValue,secondBoundary,
                 )
                 if err!=nil {
                     walk.MsgBox(dlg,"Некорректный фильтр",err.Error(),walk.MsgBoxIconError)
@@ -502,11 +600,21 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         }
         if operationOne!=nil {_=operationOne.SetCurrentIndex(0)}
         if operationTwo!=nil {_=operationTwo.SetCurrentIndex(0)}
-        for _,edit:=range []*walk.LineEdit{
-            valueOne,valueOneBoundary,valueTwo,valueTwoBoundary,
-        } {
+        for _,edit:=range []*walk.LineEdit{textOne,textTwo} {
             if edit!=nil {_=edit.SetText("")}
         }
+        for _,control:=range []*walk.DateEdit{
+            dateOne,dateOneBoundary,dateTwo,dateTwoBoundary,
+        }{
+            if control!=nil {_=control.SetDate(time.Time{})}
+        }
+        for _,control:=range []*walk.NumberEdit{
+            numberOne,numberOneBoundary,numberTwo,numberTwoBoundary,
+        }{
+            if control!=nil {_=control.SetValue(0)}
+        }
+        numberOneChanged,numberOneBoundaryChanged=true,true
+        numberTwoChanged,numberTwoBoundaryChanged=true,true
         updateOperation()
     }
     sortAndClose:=func(desc bool) {
@@ -521,24 +629,12 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         dlg.Accept()
     }
 
-    initialValue:=""
-    initialValueBoundary:=""
-    initialSecondValue:=""
-    initialSecondBoundary:=""
-    if activeCondition && previous.Kind==kind {
-        initialValue=previous.Value
-        initialValueBoundary=previous.Value2
-        if previous.Additional!=nil && previous.Additional.Kind==kind {
-            initialSecondValue=previous.Additional.Value
-            initialSecondBoundary=previous.Additional.Value2
-        }
-    }
     initialSize:=filterPopupSize(modeIndex==1)
     err:=Dialog{
         AssignTo:&dlg,
         Title:"Фильтр: "+col.Title,
         Icon:a.appIcon,
-        MinSize:Size{Width:660,Height:380},
+        MinSize:Size{Width:720,Height:380},
         Size:Size{Width:initialSize.Width,Height:initialSize.Height},
         Layout:VBox{Margins:Margins{Left:12,Top:10,Right:12,Bottom:10},Spacing:6},
         Children:[]Widget{
@@ -598,47 +694,101 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                 MinSize:Size{Height:155},MaxSize:Size{Height:192},
                 Layout:VBox{Margins:Margins{Left:8,Top:10,Right:8,Bottom:8},Spacing:5},
                 Children:[]Widget{
-                    // Fixed column widths guarantee that every operator and
-                    // its operands line up in two rows at all dialog sizes.
-                    Composite{Layout:HBox{MarginsZero:true,Spacing:7},Children:[]Widget{
-                        Label{Text:"",MinSize:Size{Width:112},MaxSize:Size{Width:112}},
-                        Label{Text:"Оператор",MinSize:Size{Width:190},MaxSize:Size{Width:190}},
-                        Label{AssignTo:&valueHeader,Text:"Значение",MinSize:Size{Width:130},MaxSize:Size{Width:130}},
-                        Label{AssignTo:&boundaryHeader,Text:"До (для диапазона)",Visible:false,
-                            ToolTipText:"Показывается только для «Между» / «Вне диапазона»",
-                            MinSize:Size{Width:130},MaxSize:Size{Width:130}},
+                    Label{Text:"Выберите оператор и значение; диапазон показывает обе границы только при необходимости."},
+                    Composite{Layout:HBox{MarginsZero:true,Spacing:6},Children:[]Widget{
+                        Label{Text:"Условие 1:",MinSize:Size{Width:104},MaxSize:Size{Width:104}},
+                        ComboBox{AssignTo:&operationOne,Model:firstLabels,CurrentIndex:initialOp,
+                            MinSize:Size{Width:184},MaxSize:Size{Width:184},
+                            OnCurrentIndexChanged:updateOperation},
+                        Label{AssignTo:&firstOperandLabel,
+                            Text:"",MinSize:Size{Width:52},MaxSize:Size{Width:52}},
+                        LineEdit{AssignTo:&textOne,Text:initialValue,
+                            Visible:kind==core.FilterText && modeIndex==1,
+                            MinSize:Size{Width:128},MaxSize:Size{Width:128},
+                            CueBanner:"Введите текст"},
+                        NumberEdit{AssignTo:&numberOne,
+                            Visible:kind==core.FilterNumber && modeIndex==1,
+                            MinSize:Size{Width:128},MaxSize:Size{Width:128},
+                            Decimals:4,Increment:1,SpinButtonsVisible:true,
+                            Value:initialNumericOne,
+                            ToolTipText:"Числовое значение; точность SQL money — 4 знака",
+                            OnValueChanged:func(){
+                                if !numberInputsInitializing && !updatingNumberPrecision {
+                                    numberOneChanged=true
+                                }
+                            }},
+                        DateEdit{AssignTo:&dateOne,Optional:true,
+                            Date:initialDateOne,Format:"dd.MM.yyyy",
+                            Visible:kind==core.FilterDate && modeIndex==1,
+                            MinSize:Size{Width:128},MaxSize:Size{Width:128},
+                            ToolTipText:"Выберите дату в стандартном календаре Windows"},
+                        Label{AssignTo:&firstBoundaryLabel,
+                            Text:"",Visible:false,
+                            MinSize:Size{Width:54},MaxSize:Size{Width:54}},
+                        NumberEdit{AssignTo:&numberOneBoundary,
+                            Visible:false,
+                            MinSize:Size{Width:128},MaxSize:Size{Width:128},
+                            Decimals:4,Increment:1,SpinButtonsVisible:true,
+                            Value:initialNumericOneBoundary,
+                            ToolTipText:"Числовая граница диапазона",
+                            OnValueChanged:func(){
+                                if !numberInputsInitializing && !updatingNumberPrecision {
+                                    numberOneBoundaryChanged=true
+                                }
+                            }},
+                        DateEdit{AssignTo:&dateOneBoundary,Optional:true,
+                            Date:initialDateOneBoundary,Format:"dd.MM.yyyy",
+                            Visible:false,
+                            MinSize:Size{Width:128},MaxSize:Size{Width:128},
+                            ToolTipText:"Выберите вторую дату в календаре"},
                         HSpacer{},
                     }},
-                    Composite{Layout:HBox{MarginsZero:true,Spacing:7},Children:[]Widget{
-                        Label{Text:"Условие 1:",MinSize:Size{Width:112},MaxSize:Size{Width:112}},
-                        ComboBox{AssignTo:&operationOne,Model:firstLabels,
-                            CurrentIndex:initialOp,
-                            MinSize:Size{Width:190},MaxSize:Size{Width:190},
+                    Composite{Layout:HBox{MarginsZero:true,Spacing:6},Children:[]Widget{
+                        Label{Text:"ИЛИ условие 2:",MinSize:Size{Width:104},MaxSize:Size{Width:104}},
+                        ComboBox{AssignTo:&operationTwo,Model:secondLabels,CurrentIndex:initialSecondOp,
+                            MinSize:Size{Width:184},MaxSize:Size{Width:184},
                             OnCurrentIndexChanged:updateOperation},
-                        LineEdit{AssignTo:&valueOne,Text:initialValue,
-                            CueBanner:filterKindInputExample(kind),
-                            MinSize:Size{Width:130},MaxSize:Size{Width:130},
-                            ToolTipText:filterKindInputExample(kind)},
-                        LineEdit{AssignTo:&valueOneBoundary,Text:initialValueBoundary,Visible:false,
-                            CueBanner:"До",
-                            MinSize:Size{Width:130},MaxSize:Size{Width:130},
-                            ToolTipText:"Вторая граница для операторов «Между» / «Вне диапазона»"},
-                        HSpacer{},
-                    }},
-                    Composite{Layout:HBox{MarginsZero:true,Spacing:7},Children:[]Widget{
-                        Label{Text:"ИЛИ условие 2:",MinSize:Size{Width:112},MaxSize:Size{Width:112}},
-                        ComboBox{AssignTo:&operationTwo,Model:secondLabels,
-                            CurrentIndex:initialSecondOp,
-                            MinSize:Size{Width:190},MaxSize:Size{Width:190},
-                            OnCurrentIndexChanged:updateOperation},
-                        LineEdit{AssignTo:&valueTwo,Text:initialSecondValue,Visible:false,
-                            CueBanner:filterKindInputExample(kind),
-                            MinSize:Size{Width:130},MaxSize:Size{Width:130},
-                            ToolTipText:"Необязательное второе условие (ИЛИ)"},
-                        LineEdit{AssignTo:&valueTwoBoundary,Text:initialSecondBoundary,Visible:false,
-                            CueBanner:"До",
-                            MinSize:Size{Width:130},MaxSize:Size{Width:130},
-                            ToolTipText:"Вторая граница для «Между» во втором условии"},
+                        Label{AssignTo:&secondOperandLabel,
+                            Text:"",MinSize:Size{Width:52},MaxSize:Size{Width:52}},
+                        LineEdit{AssignTo:&textTwo,Text:initialSecondValue,
+                            Visible:kind==core.FilterText && modeIndex==1,
+                            MinSize:Size{Width:128},MaxSize:Size{Width:128},
+                            CueBanner:"Введите текст"},
+                        NumberEdit{AssignTo:&numberTwo,
+                            Visible:kind==core.FilterNumber && modeIndex==1,
+                            MinSize:Size{Width:128},MaxSize:Size{Width:128},
+                            Decimals:4,Increment:1,SpinButtonsVisible:true,
+                            Value:initialNumericTwo,
+                            ToolTipText:"Числовое значение; точность SQL money — 4 знака",
+                            OnValueChanged:func(){
+                                if !numberInputsInitializing && !updatingNumberPrecision {
+                                    numberTwoChanged=true
+                                }
+                            }},
+                        DateEdit{AssignTo:&dateTwo,Optional:true,
+                            Date:initialDateTwo,Format:"dd.MM.yyyy",
+                            Visible:kind==core.FilterDate && modeIndex==1,
+                            MinSize:Size{Width:128},MaxSize:Size{Width:128},
+                            ToolTipText:"Выберите дату в стандартном календаре Windows"},
+                        Label{AssignTo:&secondBoundaryLabel,
+                            Text:"",Visible:false,
+                            MinSize:Size{Width:54},MaxSize:Size{Width:54}},
+                        NumberEdit{AssignTo:&numberTwoBoundary,
+                            Visible:false,
+                            MinSize:Size{Width:128},MaxSize:Size{Width:128},
+                            Decimals:4,Increment:1,SpinButtonsVisible:true,
+                            Value:initialNumericTwoBoundary,
+                            ToolTipText:"Числовая граница диапазона",
+                            OnValueChanged:func(){
+                                if !numberInputsInitializing && !updatingNumberPrecision {
+                                    numberTwoBoundaryChanged=true
+                                }
+                            }},
+                        DateEdit{AssignTo:&dateTwoBoundary,Optional:true,
+                            Date:initialDateTwoBoundary,Format:"dd.MM.yyyy",
+                            Visible:false,
+                            MinSize:Size{Width:128},MaxSize:Size{Width:128},
+                            ToolTipText:"Выберите вторую дату в календаре"},
                         HSpacer{},
                     }},
                     Composite{Layout:HBox{MarginsZero:true,Spacing:7},Children:[]Widget{
@@ -672,5 +822,6 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
     }
     updateMode()
     setStatus()
+    numberInputsInitializing=false
     dlg.Run()
 }
