@@ -411,3 +411,57 @@ func TestFilterDialogFitsCurrentContentMode(t *testing.T) {
         t.Fatalf("modal switched back without preserving position: initial=%v, restored=%v",initial,restored)
     }
 }
+
+
+func TestFilterPopupModeRepeatedSelectionNeverGrows(t *testing.T) {
+    initial:=walk.Rectangle{
+        X:140, Y:90,
+        Width:filterPopupSize(false).Width,
+        Height:filterPopupSize(false).Height,
+    }
+    state:=filterPopupModeState{current:0,anchor:initial}
+    if _,changed:=state.switchMode(0);changed {
+        t.Fatal("reselecting the current mode must not resize or relayout the dialog")
+    }
+
+    compact:=filterPopupCenteredBounds(initial,true)
+    tall:=filterPopupCenteredBounds(initial,false)
+    for i:=0;i<100;i++ {
+        got,changed:=state.switchMode(1)
+        if !changed || got!=compact {
+            t.Fatalf("iteration %d: condition popup grew or moved: got=%+v want=%+v",i,got,compact)
+        }
+        if _,changed:=state.switchMode(1);changed {
+            t.Fatalf("iteration %d: duplicate selection resized compact form",i)
+        }
+        got,changed=state.switchMode(0)
+        if !changed || got!=tall {
+            t.Fatalf("iteration %d: returning to unique values accumulated size: got=%+v want=%+v",i,got,tall)
+        }
+        if _,changed:=state.switchMode(0);changed {
+            t.Fatalf("iteration %d: duplicate selection resized unique-values form",i)
+        }
+    }
+    if _,changed:=state.switchMode(-1);changed {
+        t.Fatal("invalid current index must not change popup geometry")
+    }
+    if state.current!=0 || state.anchor!=initial {
+        t.Fatalf("popup center or selected mode drifted: %+v",state)
+    }
+
+    // Opening directly in the condition mode must not perform a gratuitous
+    // resize; its initial Dialog.Size already comes from filterPopupSize.
+    startingCondition:=filterPopupModeState{
+        current:1,
+        anchor:walk.Rectangle{X:123,Y:456,
+            Width:filterPopupSize(true).Width,Height:filterPopupSize(true).Height},
+    }
+    if _,changed:=startingCondition.switchMode(1);changed {
+        t.Fatal("opening a saved condition produced a redundant resize")
+    }
+    expected:=filterPopupCenteredBounds(startingCondition.anchor,false)
+    actual,changed:=startingCondition.switchMode(0)
+    if !changed || actual!=expected {
+        t.Fatalf("switch from initially compact mode wrong: %+v / %+v",actual,expected)
+    }
+}

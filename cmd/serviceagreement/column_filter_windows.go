@@ -130,6 +130,22 @@ func filterPopupCenteredBounds(current walk.Rectangle, conditions bool) walk.Rec
     }
 }
 
+// filterPopupModeState makes changes idempotent and uses a fixed starting
+// anchor for the modal's center. Walk can recompute layout minimum sizes
+// when a group becomes visible; using the already-grown current bounds as
+// the next resize anchor accumulates unwanted growth over repeated toggles.
+type filterPopupModeState struct {
+    current int
+    anchor walk.Rectangle
+}
+
+func (s *filterPopupModeState) switchMode(next int) (walk.Rectangle,bool) {
+    if next!=0 && next!=1 {return walk.Rectangle{},false}
+    if next==s.current {return walk.Rectangle{},false}
+    s.current=next
+    return filterPopupCenteredBounds(s.anchor,next==1),true
+}
+
 func filterHeaderTitle(col core.ListColumn, active bool) string {
     if active { return col.Title + "  ●▾" }
     return col.Title + "  ▾"
@@ -368,6 +384,10 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
     var firstOperandLabel,firstBoundaryLabel,secondOperandLabel,secondBoundaryLabel *walk.Label
     var uniqueGroup,conditionGroup *walk.GroupBox
     var conditionHint,currentFilterLabel *walk.Label
+    // Ignore events during the declarative builder's initialization.
+    // No resize on reselecting the already selected mode.
+    modeReady:=false
+    modeState:=filterPopupModeState{current:modeIndex}
     numberInputsInitializing:=true
     updatingNumberPrecision:=false
     numberOneChanged,numberOneBoundaryChanged:=false,false
@@ -453,17 +473,27 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
     }
     // Entire unused mode is hidden rather than shown disabled.
     updateMode:=func() {
-        if modeBox==nil || uniqueGroup==nil || conditionGroup==nil {return}
-        useConditions:=modeBox.CurrentIndex()==1
+        if !modeReady || modeBox==nil || dlg==nil ||
+            uniqueGroup==nil || conditionGroup==nil {return}
+        next:=modeBox.CurrentIndex()
+        newBounds,changed:=modeState.switchMode(next)
+        if !changed {
+            // Walk fires CurrentIndexChanged in some focus/selection paths
+            // even when the selected mode has not actually changed.
+            // Do not rebuild layout or resize on such notifications.
+            return
+        }
+        useConditions:=next==1
+        // Suspend layout while flipping both panels. Otherwise Walk may
+        // recompute the form minimum between the two visibility changes.
+        dlg.SetSuspended(true)
         uniqueGroup.SetVisible(!useConditions)
         conditionGroup.SetVisible(useConditions)
         if useConditions {updateOperation()}
-        // Layout is re-evaluated with only the visible group, then resize
-        // the form to the mode's content height. No large blank area above
-        // the tabs or below the action buttons.
-        if dlg!=nil {
-            _=dlg.SetBounds(filterPopupCenteredBounds(dlg.Bounds(),useConditions))
-        }
+        dlg.SetSuspended(false)
+        // Anchor at the original dialog center, not its most recent size:
+        // alternating mode changes must not compound width or height.
+        _=dlg.SetBounds(newBounds)
     }
     setStatus:=func() {
         if selectedLabel!=nil {
@@ -820,7 +850,15 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         a.warn("Фильтр по колонке",err)
         return
     }
-    updateMode()
+    // During Create, the declarative Visible flags already selected the
+    // correct panel and Dialog.Size already set the appropriate initial
+    // dimensions. Begin watching transitions only after construction.
+    modeState=filterPopupModeState{
+        current:modeBox.CurrentIndex(),
+        anchor:dlg.Bounds(),
+    }
+    modeReady=true
+    if modeState.current==1 {updateOperation()}
     setStatus()
     numberInputsInitializing=false
     dlg.Run()
