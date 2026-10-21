@@ -119,31 +119,27 @@ func filterPopupSize(conditions bool) walk.Size {
     return walk.Size{Width:filterPopupWidth,Height:height}
 }
 
-// Preserve the center of the dialog while switching between two modes
-// instead of expanding or shrinking exclusively toward the lower-right.
-func filterPopupCenteredBounds(current walk.Rectangle, conditions bool) walk.Rectangle {
-    target:=filterPopupSize(conditions)
-    return walk.Rectangle{
-        X:current.X+(current.Width-target.Width)/2,
-        Y:current.Y+(current.Height-target.Height)/2,
-        Width:target.Width,Height:target.Height,
-    }
-}
-
-// filterPopupModeState makes changes idempotent and uses a fixed starting
-// anchor for the modal's center. Walk can recompute layout minimum sizes
-// when a group becomes visible; using the already-grown current bounds as
-// the next resize anchor accumulates unwanted growth over repeated toggles.
+// A mode switch changes only the preferred HEIGHT. The window position is
+// managed by Windows; the application must never recalculate X/Y. The prior
+// version captured dlg.Bounds before dlg.Run(), when Windows had not yet
+// positioned the dialog, and moving to that stale anchor jumped to a corner.
 type filterPopupModeState struct {
     current int
-    anchor walk.Rectangle
 }
 
-func (s *filterPopupModeState) switchMode(next int) (walk.Rectangle,bool) {
-    if next!=0 && next!=1 {return walk.Rectangle{},false}
-    if next==s.current {return walk.Rectangle{},false}
+func (s *filterPopupModeState) switchMode(next int) (int,bool) {
+    if next!=0 && next!=1 {return 0,false}
+    if next==s.current {return 0,false}
     s.current=next
-    return filterPopupCenteredBounds(s.anchor,next==1),true
+    return filterPopupSize(next==1).Height,true
+}
+
+// Preserve the user's current width when changing height. This is passed to
+// SetSize, which preserves the window's X/Y instead of calling SetBounds with
+// calculated coordinates.
+func filterPopupSizeWithHeight(current walk.Size,height int) walk.Size {
+    current.Height=height
+    return current
 }
 
 func filterHeaderTitle(col core.ListColumn, active bool) string {
@@ -476,7 +472,7 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         if !modeReady || modeBox==nil || dlg==nil ||
             uniqueGroup==nil || conditionGroup==nil {return}
         next:=modeBox.CurrentIndex()
-        newBounds,changed:=modeState.switchMode(next)
+        newHeight,changed:=modeState.switchMode(next)
         if !changed {
             // Walk fires CurrentIndexChanged in some focus/selection paths
             // even when the selected mode has not actually changed.
@@ -491,9 +487,9 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         conditionGroup.SetVisible(useConditions)
         if useConditions {updateOperation()}
         dlg.SetSuspended(false)
-        // Anchor at the original dialog center, not its most recent size:
-        // alternating mode changes must not compound width or height.
-        _=dlg.SetBounds(newBounds)
+        // SetSize preserves the displayed window's X/Y. Never use
+        // SetBounds here: the dialog has been placed by Windows.
+        _=dlg.SetSize(filterPopupSizeWithHeight(dlg.Size(),newHeight))
     }
     setStatus:=func() {
         if selectedLabel!=nil {
@@ -853,10 +849,7 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
     // During Create, the declarative Visible flags already selected the
     // correct panel and Dialog.Size already set the appropriate initial
     // dimensions. Begin watching transitions only after construction.
-    modeState=filterPopupModeState{
-        current:modeBox.CurrentIndex(),
-        anchor:dlg.Bounds(),
-    }
+    modeState=filterPopupModeState{current:modeBox.CurrentIndex()}
     modeReady=true
     if modeState.current==1 {updateOperation()}
     setStatus()

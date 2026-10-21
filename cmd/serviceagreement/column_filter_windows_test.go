@@ -397,71 +397,63 @@ func TestFilterDialogFitsCurrentContentMode(t *testing.T) {
     if checklist.Height-condition.Height<100 {
         t.Fatalf("hidden checkbox list has not reclaimed enough vertical space: %v %v",condition,checklist)
     }
-    initial:=walk.Rectangle{X:220,Y:140,Width:checklist.Width,Height:checklist.Height}
-    smaller:=filterPopupCenteredBounds(initial,true)
-    if smaller.Width!=condition.Width || smaller.Height!=condition.Height {
-        t.Fatalf("modal shrink dimensions incorrect: %v",smaller)
+    // Never modify the user's current width when changing mode.
+    userSize:=walk.Size{Width:810,Height:checklist.Height}
+    resized:=filterPopupSizeWithHeight(userSize,condition.Height)
+    if resized.Width!=userSize.Width || resized.Height!=condition.Height {
+        t.Fatalf("mode switch must change only height: %v -> %v",userSize,resized)
     }
-    if smaller.Y <= initial.Y || smaller.X!=initial.X {
-        t.Fatalf("shrinking dialog should preserve center, not pin upper-left: %v->%v",initial,smaller)
-    }
-    restored:=filterPopupCenteredBounds(smaller,false)
-    if restored.Width!=initial.Width || restored.Height!=initial.Height ||
-        restored.X!=initial.X || restored.Y!=initial.Y {
-        t.Fatalf("modal switched back without preserving position: initial=%v, restored=%v",initial,restored)
+    if userSize.Height!=checklist.Height {
+        t.Fatal("size helper must not mutate original size")
     }
 }
 
-
 func TestFilterPopupModeRepeatedSelectionNeverGrows(t *testing.T) {
-    initial:=walk.Rectangle{
-        X:140, Y:90,
-        Width:filterPopupSize(false).Width,
-        Height:filterPopupSize(false).Height,
-    }
-    state:=filterPopupModeState{current:0,anchor:initial}
+    state:=filterPopupModeState{current:0}
     if _,changed:=state.switchMode(0);changed {
         t.Fatal("reselecting the current mode must not resize or relayout the dialog")
     }
-
-    compact:=filterPopupCenteredBounds(initial,true)
-    tall:=filterPopupCenteredBounds(initial,false)
+    size:=walk.Size{Width:810,Height:filterPopupSize(false).Height}
+    expectedConditionHeight:=filterPopupSize(true).Height
+    expectedListHeight:=filterPopupSize(false).Height
     for i:=0;i<100;i++ {
-        got,changed:=state.switchMode(1)
-        if !changed || got!=compact {
-            t.Fatalf("iteration %d: condition popup grew or moved: got=%+v want=%+v",i,got,compact)
+        height,changed:=state.switchMode(1)
+        if !changed || height!=expectedConditionHeight {
+            t.Fatalf("iteration %d: condition popup height is wrong: %d",i,height)
+        }
+        size=filterPopupSizeWithHeight(size,height)
+        if size.Width!=810 || size.Height!=expectedConditionHeight {
+            t.Fatalf("iteration %d: condition dialog changed width or height unexpectedly: %v",i,size)
         }
         if _,changed:=state.switchMode(1);changed {
-            t.Fatalf("iteration %d: duplicate selection resized compact form",i)
+            t.Fatalf("iteration %d: same-mode selection resized compact window",i)
         }
-        got,changed=state.switchMode(0)
-        if !changed || got!=tall {
-            t.Fatalf("iteration %d: returning to unique values accumulated size: got=%+v want=%+v",i,got,tall)
+        height,changed=state.switchMode(0)
+        if !changed || height!=expectedListHeight {
+            t.Fatalf("iteration %d: unique-values height is wrong: %d",i,height)
+        }
+        size=filterPopupSizeWithHeight(size,height)
+        if size.Width!=810 || size.Height!=expectedListHeight {
+            t.Fatalf("iteration %d: returning to unique values accumulated size: %v",i,size)
         }
         if _,changed:=state.switchMode(0);changed {
-            t.Fatalf("iteration %d: duplicate selection resized unique-values form",i)
+            t.Fatalf("iteration %d: repeated mode resized list window",i)
         }
     }
     if _,changed:=state.switchMode(-1);changed {
-        t.Fatal("invalid current index must not change popup geometry")
+        t.Fatal("invalid mode index caused resize")
     }
-    if state.current!=0 || state.anchor!=initial {
-        t.Fatalf("popup center or selected mode drifted: %+v",state)
+    if state.current!=0 {
+        t.Fatalf("last selected mode changed: %+v",state)
     }
 
-    // Opening directly in the condition mode must not perform a gratuitous
-    // resize; its initial Dialog.Size already comes from filterPopupSize.
-    startingCondition:=filterPopupModeState{
-        current:1,
-        anchor:walk.Rectangle{X:123,Y:456,
-            Width:filterPopupSize(true).Width,Height:filterPopupSize(true).Height},
-    }
+    // If the saved condition opens the short dialog initially, don't move it.
+    startingCondition:=filterPopupModeState{current:1}
     if _,changed:=startingCondition.switchMode(1);changed {
-        t.Fatal("opening a saved condition produced a redundant resize")
+        t.Fatal("opening saved condition caused gratuitous mode resize")
     }
-    expected:=filterPopupCenteredBounds(startingCondition.anchor,false)
-    actual,changed:=startingCondition.switchMode(0)
-    if !changed || actual!=expected {
-        t.Fatalf("switch from initially compact mode wrong: %+v / %+v",actual,expected)
+    height,changed:=startingCondition.switchMode(0)
+    if !changed || height!=expectedListHeight {
+        t.Fatalf("switch from initially compact mode: %d changed=%v",height,changed)
     }
 }
