@@ -62,10 +62,12 @@ type application struct {
 	table          *walk.TableView
 	search         *walk.LineEdit
 	status         *walk.Label
+    filterDetails *walk.TextEdit
 	model          *tableModel
 	withoutTable   *walk.TableView
 	withoutSearch  *walk.LineEdit
 	withoutStatus  *walk.Label
+    withoutFilterDetails *walk.TextEdit
 	withoutModel   *tableModel
 	withoutSortField string
 	withoutSortDescending bool
@@ -143,6 +145,15 @@ func run() error {
 						TableView{AssignTo: &app.table, Model: app.model, AlternatingRowBG: true,
 							MultiSelection: false, ColumnsOrderable: false, Columns: tableColumns(cfg.ListColumns),
 							OnItemActivated: app.editSelected},
+                        // Read-only multiline summary appears only when typed
+                        // conditions are active. It shows every column's
+                        // current filter and the AND/OR expression.
+                        TextEdit{
+                            AssignTo: &app.filterDetails,
+                            ReadOnly:true,Visible:false,VScroll:true,
+                            MinSize:Size{Height:52},MaxSize:Size{Height:80},
+                            Text:"",
+                        },
 						Label{Text: "Нажмите ▾ в заголовке, чтобы сортировать или отфильтровать значения. Фильтрация — по загруженным строкам."},
 						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 							PushButton{Text: "Добавить", OnClicked: app.add},
@@ -169,6 +180,12 @@ func run() error {
 							AlternatingRowBG: true, MultiSelection: false, ColumnsOrderable: false,
 							Columns: tableColumns(app.withoutModel.columns),
 							OnItemActivated: app.addFromWithout},
+                        TextEdit{
+                            AssignTo: &app.withoutFilterDetails,
+                            ReadOnly:true,Visible:false,VScroll:true,
+                            MinSize:Size{Height:52},MaxSize:Size{Height:80},
+                            Text:"",
+                        },
 						Label{Text: "Нажмите ▾ в заголовке для фильтра. Двойной щелчок открывает добавление параметров."},
 						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 							PushButton{Text: "Задать параметры", OnClicked: app.addFromWithout},

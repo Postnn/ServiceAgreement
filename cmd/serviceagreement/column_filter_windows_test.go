@@ -4,6 +4,7 @@ package main
 
 import (
     "reflect"
+    "strings"
     "testing"
 
     "github.com/Postnn/ServiceAgreement/internal/core"
@@ -258,5 +259,121 @@ func TestComposeORFilterDialogInputs(t *testing.T) {
         true,core.FilterLess,"некорректно","",
     );err==nil {
         t.Fatal("invalid optional second condition was accepted")
+    }
+}
+
+
+func TestUnusedConditionInputVisibility(t *testing.T) {
+    cases:=[]struct {
+        name string
+        op core.FilterOperator
+        active bool
+        value, boundary bool
+    }{
+        {"inactive second OR",core.FilterContains,false,false,false},
+        {"no operator selected","",false,false,false},
+        {"text contains",core.FilterContains,true,true,false},
+        {"numeric more than",core.FilterGreater,true,true,false},
+        {"numeric between",core.FilterBetween,true,true,true},
+        {"numeric outside range",core.FilterNotBetween,true,true,true},
+        {"top N",core.FilterTop,true,true,false},
+        {"above average",core.FilterAboveAverage,true,false,false},
+        {"below average",core.FilterBelowAverage,true,false,false},
+        {"date between",core.FilterBetween,true,true,true},
+    }
+    for _,tc:=range cases{
+        actualValue,actualBoundary:=editorInputVisibility(tc.op,tc.active)
+        if actualValue!=tc.value || actualBoundary!=tc.boundary {
+            t.Errorf("%s: shown=(%v,%v), want (%v,%v)",
+                tc.name,actualValue,actualBoundary,tc.value,tc.boundary)
+        }
+    }
+}
+
+func TestFilterSummaryUnderBothTables(t *testing.T) {
+    cond:=core.FilterCondition{
+        Kind:core.FilterText,Operator:core.FilterContains,Value:"Булычев",
+        Additional:&core.FilterCondition{
+            Kind:core.FilterText,Operator:core.FilterContains,Value:"Ник",
+        },
+    }
+    m:=&tableModel{columns:[]core.ListColumn{
+        {Field:"AgreementLabel",Title:"Договор"},
+        {Field:"Amount",Title:"Сумма"},
+        {Field:"Department",Title:"Отдел"},
+    }}
+    m.replace([]core.ListItem{
+        {ID:1,Values:map[string]string{"AgreementLabel":"Булычев","Amount":"1000","Department":"A"}},
+        {ID:2,Values:map[string]string{"AgreementLabel":"Ник","Amount":"500","Department":"B"}},
+    })
+    if filterSummaryText(m)!=""{
+        t.Fatal("multiline filter summary should not take up space without conditions")
+    }
+    if err:=m.conditions.Set("AgreementLabel",cond);err!=nil {t.Fatal(err)}
+    if err:=m.conditions.Set("Amount",core.FilterCondition{
+        Kind:core.FilterNumber,Operator:core.FilterGreater,Value:"100",
+    });err!=nil {t.Fatal(err)}
+    m.filters.Set("Department",map[string]bool{"A":true})
+    m.applyFilters()
+    got:=filterSummaryText(m)
+    for _,part:=range []string{
+        "Действующие фильтры", "Договор:", "содержит «Булычев»",
+        "ИЛИ содержит «Ник»", "\nИ Сумма: больше «100»",
+        "\nИ Отдел: выбрано 1 уникальных значений",
+    } {
+        if !strings.Contains(got,part) {
+            t.Errorf("summary omits %q: %s",part,got)
+        }
+    }
+    m.conditions.ClearAll()
+    if got:=filterSummaryText(m);got!="" {
+        t.Fatalf("only checkbox filters should not force typed summary panel: %s",got)
+    }
+
+    // Same helper drives the independent second list.
+    other:=&tableModel{columns:[]core.ListColumn{
+        {Field:"Договор",Title:"Договор"},
+    }}
+    other.replace([]core.ListItem{{ID:8,Values:map[string]string{"Договор":"Тест"}}})
+    if err:=other.conditions.Set("Договор",core.FilterCondition{
+        Kind:core.FilterText,Operator:core.FilterEqual,Value:"Тест",
+    });err!=nil {t.Fatal(err)}
+    if got:=filterSummaryText(other);!strings.Contains(got,"Договор: равно «Тест»") {
+        t.Fatalf("second tab does not show typed conditions: %q",got)
+    }
+}
+
+func TestClearActiveFilterWhileDialogRemainsOpen(t *testing.T) {
+    m:=&tableModel{columns:[]core.ListColumn{
+        {Field:"Department",Title:"Отдел"},{Field:"Amount",Title:"Сумма"},
+    }}
+    m.replace([]core.ListItem{
+        {ID:1,Values:map[string]string{"Department":"A","Amount":"100"},
+            Raw:map[string]any{"Amount":int64(100)}},
+        {ID:2,Values:map[string]string{"Department":"A","Amount":"500"},
+            Raw:map[string]any{"Amount":int64(500)}},
+        {ID:3,Values:map[string]string{"Department":"B","Amount":"900"},
+            Raw:map[string]any{"Amount":int64(900)}},
+    })
+    m.filters.Set("Department",map[string]bool{"A":true})
+    if err:=m.conditions.Set("Amount",core.FilterCondition{
+        Kind:core.FilterNumber,Operator:core.FilterGreater,Value:"200",
+    });err!=nil {t.Fatal(err)}
+    m.applyFilters()
+    if len(m.items)!=1 || m.items[0].ID!=2 {
+        t.Fatalf("test setup incorrect: %+v",m.items)
+    }
+    clearOneColumnFilter(m,"Amount")
+    if m.conditions.Active("Amount") || m.filters.Active("Amount") {
+        t.Fatal("active typed condition not removed")
+    }
+    if !m.filters.Active("Department") {
+        t.Fatal("clearing one condition changed a different column")
+    }
+    if len(m.items)!=2 || m.items[0].ID!=1 || m.items[1].ID!=2 {
+        t.Fatalf("filter was not reapplied without reopening dialog: %+v",m.items)
+    }
+    if got:=filterSummaryText(m);got!="" {
+        t.Fatalf("typed filter summary remains after clearing: %s",got)
     }
 }

@@ -117,11 +117,30 @@ func (a *application) updateColumnFilterTitles(table *walk.TableView, model *tab
     }
 }
 
+// filterSummaryText renders a full multiline explanation below the table.
+// Show it if at least one typed condition is active, and include checkbox
+// filters in other columns so the whole AND/OR expression is understandable.
+func filterSummaryText(model *tableModel) string {
+    if model == nil || model.conditions.Count()==0 {return ""}
+    parts:=make([]string,0,model.conditions.Count()+model.filters.Count())
+    for _,col:=range model.columns {
+        if cond,ok:=model.conditions.Get(col.Field);ok {
+            parts=append(parts,col.Title+": "+cond.Description())
+        }else if model.filters.Active(col.Field) {
+            selected:=model.filters[strings.ToLower(strings.TrimSpace(col.Field))]
+            parts=append(parts,fmt.Sprintf("%s: выбрано %d уникальных значений",col.Title,len(selected)))
+        }
+    }
+    if len(parts)==0 {return ""}
+    return "Действующие фильтры (ИЛИ внутри колонки, И между колонками):\n"+
+        strings.Join(parts,"\nИ ")
+}
+
 func (a *application) updateFilteredStatus(unconfigured bool) {
-    model,status:=a.model,a.status
+    model,status,details:=a.model,a.status,a.filterDetails
     prefix:="Договоров с параметрами"
     if unconfigured {
-        model,status=a.withoutModel,a.withoutStatus
+        model,status,details=a.withoutModel,a.withoutStatus,a.withoutFilterDetails
         prefix="Договоров без параметров"
     }
     if model==nil || status==nil {return}
@@ -129,19 +148,18 @@ func (a *application) updateFilteredStatus(unconfigured bool) {
     if count:=model.filters.Count()+model.conditions.Count();count>0 {
         msg+=fmt.Sprintf(" · фильтров: %d",count)
     }
-    var descriptions []string
-    for _,col:=range model.columns {
-        if cond,ok:=model.conditions.Get(col.Field);ok {
-            descriptions=append(descriptions,col.Title+": "+cond.Description())
-        }else if model.filters.Active(col.Field) {
-            selected:=model.filters[strings.ToLower(strings.TrimSpace(col.Field))]
-            descriptions=append(descriptions,fmt.Sprintf("%s: выбрано значений %d",col.Title,len(selected)))
+    status.SetText(msg)
+    if details!=nil {
+        summary:=filterSummaryText(model)
+        if summary=="" {
+            _=details.SetVisible(false)
+            _=details.SetText("")
+        }else{
+            // Native Win32 EDIT controls expect CRLF to display new lines.
+            _=details.SetText(strings.ReplaceAll(summary,"\n","\r\n"))
+            _=details.SetVisible(true)
         }
     }
-    if len(descriptions)>0 {
-        msg+=" · "+strings.Join(descriptions," И ")
-    }
-    status.SetText(msg)
 }
 
 // queueColumnFilter opens the modal only after Walk finishes processing
@@ -222,11 +240,29 @@ func filterKindInputExample(kind core.FilterKind) string {
     default:return "Введите текст или его часть"
     }
 }
+// editorInputVisibility is independent of Windows controls and therefore
+// unit-testable. Disabled, grey input boxes should never remain visible.
+func editorInputVisibility(op core.FilterOperator,active bool) (showValue,showBoundary bool) {
+    if !active {return false,false}
+    showValue=op!=core.FilterAboveAverage && op!=core.FilterBelowAverage
+    showBoundary=op==core.FilterBetween || op==core.FilterNotBetween
+    return
+}
+
 func filterOperatorIndex(ops []operatorChoice, op core.FilterOperator) int {
     for i,option:=range ops {
         if option.Operator==op {return i}
     }
     return 0
+}
+
+// Clearing the active condition must immediately update the loaded view,
+// without closing the filter dialog or touching filters on other columns.
+func clearOneColumnFilter(model *tableModel, field string) {
+    if model==nil {return}
+    model.conditions.Clear(field)
+    model.filters.Clear(field)
+    model.applyFilters()
 }
 
 // composeORFilter keeps a Between operator's second boundary separate
@@ -275,18 +311,20 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
 
     ops:=conditionOperators(kind)
     labels:=make([]string,len(ops))
-    secondLabels:=make([]string,0,len(ops)+1)
-    secondLabels=append(secondLabels,"— не использовать —")
+    firstLabels:=[]string{"— не использовать —"}
+    secondLabels:=[]string{"— не использовать —"}
     for i,op:=range ops {
         labels[i]=op.Caption
+        firstLabels=append(firstLabels,op.Caption)
         secondLabels=append(secondLabels,op.Caption)
     }
     modeIndex:=0
     if activeCondition {modeIndex=1}
-    initialOp:=0
-    initialSecondOp:=0 // index 0 explicitly means the optional OR branch is absent
+    initialOp:=1 // convenient default when enabling condition mode
+    if kind==core.FilterText {initialOp=filterOperatorIndex(ops,core.FilterContains)+1}
+    initialSecondOp:=0 // second OR branch absent by default
     if activeCondition && previous.Kind==kind {
-        initialOp=filterOperatorIndex(ops,previous.Operator)
+        initialOp=filterOperatorIndex(ops,previous.Operator)+1
         if previous.Additional!=nil && previous.Additional.Kind==kind {
             initialSecondOp=filterOperatorIndex(ops,previous.Additional.Operator)+1
         }
@@ -299,7 +337,7 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
     var modeBox,operationOne,operationTwo *walk.ComboBox
     var valueOne,valueOneBoundary,valueTwo,valueTwoBoundary *walk.LineEdit
     var uniqueGroup,conditionGroup *walk.GroupBox
-    var conditionHint *walk.Label
+    var conditionHint,currentFilterLabel,valueHeader,boundaryHeader *walk.Label
 
     textStatus:="Текущий фильтр: не установлен"
     if activeCondition {
@@ -308,11 +346,14 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         textStatus=fmt.Sprintf("Текущий фильтр: выбрано %d уникальных значений",len(allowed))
     }
 
-    currentFirstOperation:=func() core.FilterOperator {
-        if operationOne==nil {return ops[initialOp].Operator}
+    currentFirstOperation:=func() (core.FilterOperator,bool) {
+        if operationOne==nil {
+            if initialOp<=0 {return "",false}
+            return ops[initialOp-1].Operator,true
+        }
         idx:=operationOne.CurrentIndex()
-        if idx<0 || idx>=len(ops) {return ops[0].Operator}
-        return ops[idx].Operator
+        if idx<=0 || idx>len(ops) {return "",false}
+        return ops[idx-1].Operator,true
     }
     currentSecondOperation:=func() (core.FilterOperator,bool) {
         if operationTwo==nil {return "",false}
@@ -320,36 +361,42 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         if idx<=0 || idx>len(ops) {return "",false}
         return ops[idx-1].Operator,true
     }
-    // Two identical form rows: operator, value, and optional second bound.
-    // The second row is an OPTIONAL alternative and is disabled unless the
-    // user selects an operator other than "— не использовать —".
+    // Hide irrelevant inputs entirely. Disabled empty grey boxes previously
+    // confused users: a range boundary is only visible for Between/NotBetween,
+    // and the second value appears only with an active second OR operator.
     updateOperation:=func() {
-        updateRow:=func(op core.FilterOperator,active bool,first,boundary *walk.LineEdit) {
-            if first==nil || boundary==nil {return}
-            wantsValue:=active &&
-                op!=core.FilterAboveAverage && op!=core.FilterBelowAverage
-            wantsRange:=active && (op==core.FilterBetween || op==core.FilterNotBetween)
-            first.SetEnabled(wantsValue)
-            boundary.SetEnabled(wantsRange)
-            if active && op==core.FilterTop && strings.TrimSpace(first.Text())=="" {
-                _=first.SetText("10")
-            }
+        firstOp,firstActive:=currentFirstOperation()
+        secondOp,secondActive:=currentSecondOperation()
+        showFirstValue,showFirstBoundary:=editorInputVisibility(firstOp,firstActive)
+        showSecondValue,showSecondBoundary:=editorInputVisibility(secondOp,secondActive)
+        if valueOne!=nil {_=valueOne.SetVisible(showFirstValue)}
+        if valueOneBoundary!=nil {_=valueOneBoundary.SetVisible(showFirstBoundary)}
+        if valueTwo!=nil {_=valueTwo.SetVisible(showSecondValue)}
+        if valueTwoBoundary!=nil {_=valueTwoBoundary.SetVisible(showSecondBoundary)}
+        if valueHeader!=nil {
+            _=valueHeader.SetVisible(showFirstValue || showSecondValue)
         }
-        updateRow(currentFirstOperation(),true,valueOne,valueOneBoundary)
-        if secondOp,active:=currentSecondOperation();active {
-            updateRow(secondOp,true,valueTwo,valueTwoBoundary)
-        }else{
-            updateRow("",false,valueTwo,valueTwoBoundary)
+        if boundaryHeader!=nil {
+            _=boundaryHeader.SetVisible(showFirstBoundary || showSecondBoundary)
+        }
+        if firstActive && firstOp==core.FilterTop && valueOne!=nil &&
+            strings.TrimSpace(valueOne.Text())=="" {
+            _=valueOne.SetText("10")
+        }
+        if secondActive && secondOp==core.FilterTop && valueTwo!=nil &&
+            strings.TrimSpace(valueTwo.Text())=="" {
+            _=valueTwo.SetText("10")
         }
         if conditionHint!=nil {
-            conditionHint.SetText("Условия этой колонки — ИЛИ; фильтры разных колонок — И.")
+            conditionHint.SetText("Внутри колонки — ИЛИ; между колонками — И.")
         }
     }
+    // Entire unused mode is hidden rather than shown disabled.
     updateMode:=func() {
         if modeBox==nil || uniqueGroup==nil || conditionGroup==nil {return}
         useConditions:=modeBox.CurrentIndex()==1
-        uniqueGroup.SetEnabled(!useConditions)
-        conditionGroup.SetEnabled(useConditions)
+        _=uniqueGroup.SetVisible(!useConditions)
+        _=conditionGroup.SetVisible(useConditions)
         if useConditions {updateOperation()}
     }
     setStatus:=func() {
@@ -372,21 +419,32 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
             model.filters.Clear(field)
             model.conditions.Clear(field)
         }else if modeBox!=nil && modeBox.CurrentIndex()==1 {
+            firstOp,firstActive:=currentFirstOperation()
             secondOp,secondActive:=currentSecondOperation()
-            cond,err:=composeORFilter(
-                kind,currentFirstOperation(),valueOne.Text(),valueOneBoundary.Text(),
-                secondActive,secondOp,valueTwo.Text(),valueTwoBoundary.Text(),
-            )
-            if err!=nil {
-                walk.MsgBox(dlg,"Некорректный фильтр",err.Error(),walk.MsgBoxIconError)
-                return
+            if !firstActive {
+                if secondActive {
+                    walk.MsgBox(dlg,"Некорректный фильтр",
+                        "Сначала выберите первое условие, либо отключите второе.",
+                        walk.MsgBoxIconError)
+                    return
+                }
+                model.conditions.Clear(field)
+                model.filters.Clear(field)
+            }else{
+                cond,err:=composeORFilter(
+                    kind,firstOp,valueOne.Text(),valueOneBoundary.Text(),
+                    secondActive,secondOp,valueTwo.Text(),valueTwoBoundary.Text(),
+                )
+                if err!=nil {
+                    walk.MsgBox(dlg,"Некорректный фильтр",err.Error(),walk.MsgBoxIconError)
+                    return
+                }
+                if err:=model.conditions.Set(field,cond);err!=nil {
+                    walk.MsgBox(dlg,"Некорректный фильтр",err.Error(),walk.MsgBoxIconError)
+                    return
+                }
+                model.filters.Clear(field)
             }
-            if err:=model.conditions.Set(field,cond);err!=nil {
-                walk.MsgBox(dlg,"Некорректный фильтр",err.Error(),walk.MsgBoxIconError)
-                return
-            }
-            // The checkbox selection for the same column becomes inactive.
-            model.filters.Clear(field)
         }else{
             model.conditions.Clear(field)
             if values.selectedCount()==len(source) {
@@ -399,6 +457,25 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         a.updateColumnFilterTitles(table,model)
         a.updateFilteredStatus(unconfigured)
         dlg.Accept()
+    }
+    // Unlike "Сбросить колонку", this button deliberately keeps the
+    // dialog open. The clearing is applied immediately, so the table and
+    // multiline summary behind the dialog update before any new condition.
+    clearConditionInDialog:=func() {
+        clearOneColumnFilter(model,field)
+        a.updateColumnFilterTitles(table,model)
+        a.updateFilteredStatus(unconfigured)
+        if currentFilterLabel!=nil {
+            _=currentFilterLabel.SetText("Текущий фильтр: не установлен")
+        }
+        if operationOne!=nil {_=operationOne.SetCurrentIndex(0)}
+        if operationTwo!=nil {_=operationTwo.SetCurrentIndex(0)}
+        for _,edit:=range []*walk.LineEdit{
+            valueOne,valueOneBoundary,valueTwo,valueTwoBoundary,
+        } {
+            if edit!=nil {_=edit.SetText("")}
+        }
+        updateOperation()
     }
     sortAndClose:=func(desc bool) {
         if unconfigured{
@@ -437,7 +514,7 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                 PushButton{Text:"↓  По убыванию",OnClicked:func(){sortAndClose(true)}},
                 HSpacer{},
             }},
-            Label{Text:textStatus,ToolTipText:textStatus},
+            Label{AssignTo:&currentFilterLabel,Text:textStatus,ToolTipText:textStatus},
             Composite{Layout:HBox{MarginsZero:true,Spacing:8},Children:[]Widget{
                 Label{Text:"Режим фильтрации:"},
                 ComboBox{AssignTo:&modeBox,
@@ -449,7 +526,7 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
             GroupBox{
                 AssignTo:&uniqueGroup,
                 Title:"Выбор уникальных значений",
-                Enabled:modeIndex==0,
+                Visible:modeIndex==0,
                 Layout:VBox{Margins:Margins{Left:8,Top:10,Right:8,Bottom:8},Spacing:6},
                 Children:[]Widget{
                     LineEdit{AssignTo:&searchBox,CueBanner:"Поиск среди значений...",
@@ -480,7 +557,7 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
             GroupBox{
                 AssignTo:&conditionGroup,
                 Title:filterKindCaption(kind)+" — по введённому значению",
-                Enabled:modeIndex==1,
+                Visible:modeIndex==1,
                 Layout:VBox{Margins:Margins{Left:8,Top:10,Right:8,Bottom:8},Spacing:6},
                 Children:[]Widget{
                     // Fixed column widths guarantee that every operator and
@@ -488,13 +565,15 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                     Composite{Layout:HBox{MarginsZero:true,Spacing:7},Children:[]Widget{
                         Label{Text:"",MinSize:Size{Width:112},MaxSize:Size{Width:112}},
                         Label{Text:"Оператор",MinSize:Size{Width:190},MaxSize:Size{Width:190}},
-                        Label{Text:"Значение",MinSize:Size{Width:130},MaxSize:Size{Width:130}},
-                        Label{Text:"Вторая граница",MinSize:Size{Width:130},MaxSize:Size{Width:130}},
+                        Label{AssignTo:&valueHeader,Text:"Значение",MinSize:Size{Width:130},MaxSize:Size{Width:130}},
+                        Label{AssignTo:&boundaryHeader,Text:"До (для диапазона)",Visible:false,
+                            ToolTipText:"Показывается только для «Между» / «Вне диапазона»",
+                            MinSize:Size{Width:130},MaxSize:Size{Width:130}},
                         HSpacer{},
                     }},
                     Composite{Layout:HBox{MarginsZero:true,Spacing:7},Children:[]Widget{
                         Label{Text:"Условие 1:",MinSize:Size{Width:112},MaxSize:Size{Width:112}},
-                        ComboBox{AssignTo:&operationOne,Model:labels,
+                        ComboBox{AssignTo:&operationOne,Model:firstLabels,
                             CurrentIndex:initialOp,
                             MinSize:Size{Width:190},MaxSize:Size{Width:190},
                             OnCurrentIndexChanged:updateOperation},
@@ -502,8 +581,8 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                             CueBanner:filterKindInputExample(kind),
                             MinSize:Size{Width:130},MaxSize:Size{Width:130},
                             ToolTipText:filterKindInputExample(kind)},
-                        LineEdit{AssignTo:&valueOneBoundary,Text:initialValueBoundary,
-                            CueBanner:"До / граница",
+                        LineEdit{AssignTo:&valueOneBoundary,Text:initialValueBoundary,Visible:false,
+                            CueBanner:"До",
                             MinSize:Size{Width:130},MaxSize:Size{Width:130},
                             ToolTipText:"Вторая граница для операторов «Между» / «Вне диапазона»"},
                         HSpacer{},
@@ -514,18 +593,26 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                             CurrentIndex:initialSecondOp,
                             MinSize:Size{Width:190},MaxSize:Size{Width:190},
                             OnCurrentIndexChanged:updateOperation},
-                        LineEdit{AssignTo:&valueTwo,Text:initialSecondValue,
+                        LineEdit{AssignTo:&valueTwo,Text:initialSecondValue,Visible:false,
                             CueBanner:filterKindInputExample(kind),
                             MinSize:Size{Width:130},MaxSize:Size{Width:130},
                             ToolTipText:"Необязательное второе условие (ИЛИ)"},
-                        LineEdit{AssignTo:&valueTwoBoundary,Text:initialSecondBoundary,
-                            CueBanner:"До / граница",
+                        LineEdit{AssignTo:&valueTwoBoundary,Text:initialSecondBoundary,Visible:false,
+                            CueBanner:"До",
                             MinSize:Size{Width:130},MaxSize:Size{Width:130},
                             ToolTipText:"Вторая граница для «Между» во втором условии"},
                         HSpacer{},
                     }},
-                    Label{AssignTo:&conditionHint,
-                        Text:"Условия этой колонки — ИЛИ; фильтры разных колонок — И."},
+                    Composite{Layout:HBox{MarginsZero:true,Spacing:7},Children:[]Widget{
+                        Label{AssignTo:&conditionHint,
+                            Text:"Внутри колонки — ИЛИ; между колонками — И."},
+                        HSpacer{},
+                        PushButton{
+                            Text:"Очистить условие",
+                            ToolTipText:"Сразу удалить фильтр этой колонки, не закрывая окно. Другие колонки не изменятся.",
+                            OnClicked:clearConditionInDialog,
+                        },
+                    }},
                 },
             },
             Composite{Layout:HBox{MarginsZero:true,Spacing:7},Children:[]Widget{
