@@ -112,17 +112,17 @@ func filterNeedsBoundary(op core.FilterOperator) bool {
 func filterRangeExplanation(kind core.FilterKind, first, second core.FilterOperator) string {
     if kind==core.FilterDate {
         if first==core.FilterNotBetween || second==core.FilterNotBetween {
-            return "Вне периода: Меньше От ИЛИ Больше По."
+            return "Показать даты до начала периода или после его окончания. Даты начала и окончания не входят."
         }
         if first==core.FilterBetween || second==core.FilterBetween {
-            return "Между датами: Больше или равно От, Меньше или равно По."
+            return "Показать даты с начала по окончание периода. Обе даты включены."
         }
     }
     if first==core.FilterBetween || second==core.FilterBetween {
-        return "Между числами: ≥ От, ≤ По (включительно)."
+        return "Показать значения от начала до конца диапазона, включая обе границы."
     }
     if first==core.FilterNotBetween || second==core.FilterNotBetween {
-        return "Вне диапазона: < От ИЛИ > По."
+        return "Показать значения до начала или после окончания диапазона. Границы не входят."
     }
-    return "Внутри колонки — ИЛИ; между колонками — И."
+    return "Условия одной колонки объединяются через ИЛИ, между колонками — И."
 }
