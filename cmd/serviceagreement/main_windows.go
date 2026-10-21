@@ -136,7 +136,7 @@ func run() error {
 							PushButton{Text: "Обновить", OnClicked: app.refresh},
 						}},
 						TableView{AssignTo: &app.table, Model: app.model, AlternatingRowBG: true,
-							MultiSelection: false, Columns: tableColumns(cfg.ListColumns),
+							MultiSelection: false, ColumnsOrderable: false, Columns: tableColumns(cfg.ListColumns),
 							OnItemActivated: app.editSelected},
 						Label{Text: "Нажмите ▾ в заголовке, чтобы сортировать или отфильтровать значения. Фильтрация — по загруженным строкам."},
 						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
@@ -161,7 +161,7 @@ func run() error {
 							PushButton{Text: "Обновить", OnClicked: app.refreshWithout},
 						}},
 						TableView{AssignTo: &app.withoutTable, Model: app.withoutModel,
-							AlternatingRowBG: true, MultiSelection: false,
+							AlternatingRowBG: true, MultiSelection: false, ColumnsOrderable: false,
 							Columns: tableColumns(app.withoutModel.columns),
 							OnItemActivated: app.addFromWithout},
 						Label{Text: "Нажмите ▾ в заголовке для фильтра. Двойной щелчок открывает добавление параметров."},
@@ -177,7 +177,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("создание главного окна: %w", err)
 	}
-	app.table.ColumnClicked().Attach(func(i int){app.showColumnFilter(i,false)})
+	app.table.SetColumnsOrderable(false)
+    app.withoutTable.SetColumnsOrderable(false)
+    app.table.ColumnClicked().Attach(func(i int){app.showColumnFilter(i,false)})
     app.withoutTable.ColumnClicked().Attach(func(i int){app.showColumnFilter(i,true)})
 	if loadErr != nil {
 		app.status.SetText("Требуется настройка config.json — нажмите значок ⚙ справа вверху")
@@ -218,6 +220,7 @@ func (a *application) connect(cfg core.Config) error {
 }
 
 func (a *application) applyColumns(cols []core.ListColumn) error {
+    a.table.SetColumnsOrderable(false)
 	if err := a.table.Columns().Clear(); err != nil {
 		return err
 	}
@@ -387,6 +390,7 @@ func (a *application) refreshBoth() {
 }
 
 func (a *application) applyUnconfiguredColumns(names []string) error {
+    a.withoutTable.SetColumnsOrderable(false)
 	cols := core.UnconfiguredColumns(names)
     unchanged := len(a.withoutModel.columns) == len(cols)
 	if unchanged {

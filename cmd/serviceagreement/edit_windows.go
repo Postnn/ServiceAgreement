@@ -53,7 +53,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 	var docMonths, payMonths, offMonths *walk.LineEdit
 	var docDirection, payDirection, offDirection *walk.ComboBox
 	var docDD, payDD, offDD *walk.ComboBox
-	var docHint, payHint, offHint, amountHint *walk.Label
+	var docHint, payHint, offHint *walk.Label
 	var contractBox, typeBox, periodBox, monthBox *walk.ComboBox
 	var autoBox, notifyBox *walk.CheckBox
 	var saveButton *walk.PushButton
@@ -160,16 +160,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
     if !amountFormatOK {
         displayedAmount = original.Amount
     }
-	updateAmountDisplay := func() {
-        if amount == nil || amountHint == nil { return }
-        if exact, err := core.MoneyValueFromEditor(amount.Text(), displayedAmount, original.Amount); err == nil {
-            if text, ok := core.MoneyDisplayN2(exact); ok {
-                amountHint.SetText("Вид N2: " + text + " — исходная точность SQL money сохраняется, пока сумма не изменена")
-            }
-        } else {
-            amountHint.SetText("Введите сумму в формате N2, например 1 234,56")
-        }
-    }
+
 	var saved bool
 	onSave := func() {
 		readInt := func(label string, e *walk.LineEdit) (int, error) { return core.ParseIntField(label, e.Text()) }
@@ -285,8 +276,8 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 				Label{Text: "Автооплата:"},
 				CheckBox{AssignTo: &autoBox, Text: "Создавать служебку автоматически", Checked: original.AutoPay == 1},
 				Label{Text: "Сумма абонентской платы:"},
-				LineEdit{AssignTo: &amount, Text: displayedAmount, OnTextChanged: updateAmountDisplay},
-                Label{AssignTo: &amountHint, Text: ""},
+				LineEdit{AssignTo: &amount, Text: displayedAmount,
+                    ToolTipText: "Сумма в формате N2 (например, 1 234,56). Исходная точность SQL money сохраняется, если сумму не менять."},
 				Label{Text: "День начала периода (1–31):"},
 				LineEdit{AssignTo: &day, Text: intText(original.StartDay), OnTextChanged: func() { updateExamples() }},
 				Label{Text: "Месяц начала периода:"},
@@ -377,7 +368,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 	contractChoice.box = contractBox
 	typeChoice.box = typeBox
 	updateExamples()
-    updateAmountDisplay()
+
 	dlg.Run()
 	return saved
 }

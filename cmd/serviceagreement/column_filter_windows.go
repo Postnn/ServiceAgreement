@@ -166,11 +166,10 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         AssignTo:&dlg,
         Title:"Фильтр: "+col.Title,
         Icon:a.appIcon,
-        MinSize:Size{Width:390,Height:450},
-        Size:Size{Width:440,Height:530},
+        MinSize:Size{Width:390,Height:425},
+        Size:Size{Width:440,Height:500},
         Layout:VBox{Margins:Margins{Left:12,Top:10,Right:12,Bottom:12},Spacing:7},
         Children:[]Widget{
-            Label{Text:"Фильтр по столбцу: "+col.Title,Font:Font{Family:"Segoe UI",PointSize:11,Bold:true}},
             Composite{Layout:HBox{MarginsZero:true,Spacing:7},Children:[]Widget{
                 PushButton{Text:"↑  По возрастанию",OnClicked:func(){sortAndClose(false)}},
                 PushButton{Text:"↓  По убыванию",OnClicked:func(){sortAndClose(true)}},
@@ -180,9 +179,13 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                 Title:"Значения колонки",
                 Layout:VBox{Margins:Margins{Left:8,Top:10,Right:8,Bottom:8},Spacing:6},
                 Children:[]Widget{
-                    LineEdit{AssignTo:&searchBox,CueBanner:"Поиск среди значений...",OnTextChanged:func(){
-                        if searchBox!=nil {values.search(searchBox.Text())}
-                    }},
+                    LineEdit{AssignTo:&searchBox,CueBanner:"Поиск среди значений...",
+                        ToolTipText:"Введите фрагмент значения и нажмите Enter или перейдите к другому элементу.",
+                        // Walk's EditingFinished event fires on Enter and WM_KILLFOCUS.
+                        // Do not reset the checklist on every keystroke.
+                        OnEditingFinished:func(){
+                            if searchBox!=nil {values.search(searchBox.Text())}
+                        }},
                     Composite{Layout:HBox{MarginsZero:true,Spacing:6},Children:[]Widget{
                         PushButton{Text:"Выбрать всё",OnClicked:func(){values.selectVisible(true)}},
                         PushButton{Text:"Снять всё",OnClicked:func(){values.selectVisible(false)}},
