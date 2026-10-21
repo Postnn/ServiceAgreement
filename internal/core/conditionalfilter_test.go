@@ -170,3 +170,164 @@ func TestMixingConditionsAndCheckboxFiltersAndFacets(t *testing.T) {
     conditions.KeepFields([]ListColumn{{Field:"Amount"}})
     if conditions.Count()!=0 {t.Fatal("removed SQL alias retained condition")}
 }
+
+
+func TestTwoConditionsSameColumnUseORDifferentColumnsUseAND(t *testing.T) {
+    rows:=conditionalRows()
+    cases:=[]struct {
+        name,field string
+        first,second FilterCondition
+        want []int
+    }{
+        {
+            name:"Russian text contains OR exact match",field:"Name",
+            first:FilterCondition{Kind:FilterText,Operator:FilterContains,Value:"ДОГОВОР"},
+            second:FilterCondition{Kind:FilterText,Operator:FilterEqual,Value:"Подписан"},
+            want:[]int{1,3,4},
+        },
+        {
+            name:"numeric less OR greater",field:"Amount",
+            first:FilterCondition{Kind:FilterNumber,Operator:FilterLess,Value:"8"},
+            second:FilterCondition{Kind:FilterNumber,Operator:FilterGreater,Value:"20"},
+            want:[]int{1,4},
+        },
+        {
+            name:"numeric range OR equal",field:"Amount",
+            first:FilterCondition{Kind:FilterNumber,Operator:FilterBetween,Value:"8",Value2:"10"},
+            second:FilterCondition{Kind:FilterNumber,Operator:FilterEqual,Value:"30"},
+            want:[]int{2,4,5},
+        },
+        {
+            name:"date earlier OR later",field:"SignedAt",
+            first:FilterCondition{Kind:FilterDate,Operator:FilterLess,Value:"04.01.2026"},
+            second:FilterCondition{Kind:FilterDate,Operator:FilterGreater,Value:"09.03.2026"},
+            want:[]int{1,5},
+        },
+        {
+            name:"top N OR lower than threshold",field:"Amount",
+            first:FilterCondition{Kind:FilterNumber,Operator:FilterTop,Value:"1"},
+            second:FilterCondition{Kind:FilterNumber,Operator:FilterLess,Value:"6"},
+            want:[]int{1,4},
+        },
+        {
+            name:"above average OR low number",field:"Amount",
+            first:FilterCondition{Kind:FilterNumber,Operator:FilterAboveAverage},
+            second:FilterCondition{Kind:FilterNumber,Operator:FilterLess,Value:"8"},
+            want:[]int{1,3,4},
+        },
+        {
+            name:"average second branch",field:"Amount",
+            first:FilterCondition{Kind:FilterNumber,Operator:FilterEqual,Value:"8"},
+            second:FilterCondition{Kind:FilterNumber,Operator:FilterAboveAverage},
+            want:[]int{2,3,4},
+        },
+    }
+    for _,tc:=range cases {
+        t.Run(tc.name,func(t *testing.T){
+            first:=tc.first
+            second:=tc.second
+            first.Additional=&second
+            filters:=FilterConditionState{}
+            if err:=filters.Set(tc.field,first);err!=nil {t.Fatal(err)}
+            if got:=ids(filters.Apply(rows));!reflect.DeepEqual(got,tc.want) {
+                t.Fatalf("within-column OR: got %v, expected %v",got,tc.want)
+            }
+            stored,exists:=filters.Get(tc.field)
+            if !exists || stored.Additional==nil {t.Fatal("second OR condition not persisted")}
+            if !strings.Contains(stored.Description()," ИЛИ ") ||
+                !strings.HasPrefix(stored.Description(),"(") {
+                t.Fatalf("OR not represented in filter description: %q",stored.Description())
+            }
+            if err:=stored.Validate();err!=nil {t.Fatal(err)}
+        })
+    }
+
+    conditions:=FilterConditionState{}
+    first:=FilterCondition{Kind:FilterText,Operator:FilterContains,Value:"Договор"}
+    second:=FilterCondition{Kind:FilterText,Operator:FilterEqual,Value:"Подписан"}
+    first.Additional=&second
+    if err:=conditions.Set("Name",first);err!=nil {t.Fatal(err)}
+    // (Договор OR Подписан) AND Department=A => only the two contracts.
+    checkboxes:=ColumnFilterState{}
+    checkboxes.Set("Department",map[string]bool{"A":true})
+    if got:=ids(conditions.Apply(checkboxes.Apply(rows)));!reflect.DeepEqual(got,[]int{1,3}) {
+        t.Fatalf("(OR inside Name) AND (Department=A): %v",got)
+    }
+
+    // Another typed condition is also connected by AND, not by OR.
+    amount:=FilterCondition{Kind:FilterNumber,Operator:FilterGreater,Value:"10"}
+    if err:=conditions.Set("Amount",amount);err!=nil {t.Fatal(err)}
+    if got:=ids(conditions.Apply(checkboxes.Apply(rows)));!reflect.DeepEqual(got,[]int{3}) {
+        t.Fatalf("(Name condition 1 OR 2) AND Amount > 10 AND Department=A: %v",got)
+    }
+    if conditions.Count()!=2 {t.Fatalf("two columns expected, got %d",conditions.Count())}
+    if conditions.ApplyExcept(rows,"Name")==nil {t.Fatal("apply-except unexpectedly nil")}
+    // Removing only the Name condition must leave the amount requirement.
+    conditions.Clear("Name")
+    if conditions.Active("Name") || !conditions.Active("Amount") {
+        t.Fatalf("wrong column filter cleared: %v",conditions)
+    }
+}
+
+func TestOptionalSecondConditionValidationAndCloning(t *testing.T) {
+    first:=FilterCondition{Kind:FilterText,Operator:FilterStarts,Value:"Договор"}
+    if err:=first.Validate();err!=nil {t.Fatal("single branch should work",err)}
+    if desc:=first.Description();strings.Contains(desc,"ИЛИ") {
+        t.Fatalf("single branch shown as pair: %s",desc)
+    }
+    badNumber:=FilterCondition{Kind:FilterNumber,Operator:FilterGreater,Value:"не число"}
+    first.Additional=&badNumber
+    if err:=first.Validate();err==nil {
+        t.Fatal("a second condition of a different type must fail")
+    }
+    first.Kind=FilterNumber
+    first.Operator=FilterGreater
+    first.Value="10"
+    if err:=first.Validate();err==nil {
+        t.Fatal("invalid numeric input for OR branch was accepted")
+    }
+    second:=FilterCondition{Kind:FilterNumber,Operator:FilterLess,Value:"20"}
+    first.Additional=&second
+    if err:=first.Validate();err!=nil {t.Fatal(err)}
+    filters:=FilterConditionState{}
+    if err:=filters.Set("Amount",first);err!=nil {t.Fatal(err)}
+    // The stored second condition must not change when the calling code
+    // subsequently edits its temporary UI values.
+    second.Value="1000"
+    stored,_:=filters.Get("Amount")
+    if stored.Additional==nil || stored.Additional.Value!="20" {
+        t.Fatalf("stored condition was mutated through shared pointer: %+v",stored)
+    }
+    third:=FilterCondition{Kind:FilterNumber,Operator:FilterEqual,Value:"15"}
+    second.Additional=&third
+    first.Additional=&second
+    if err:=first.Validate();err==nil {t.Fatal("three levels of OR must be rejected")}
+    first.Additional=nil
+    if err:=first.Validate();err!=nil {t.Fatal("one branch should still validate",err)}
+}
+
+func TestTwoConditionsWithMixedTextOperators(t *testing.T) {
+    condition:=FilterCondition{
+        Kind:FilterText,Operator:FilterContains,Value:"булычев",
+        Additional:&FilterCondition{
+            Kind:FilterText,Operator:FilterEnds,Value:"Петров",
+        },
+    }
+    description:=condition.Description()
+    want:="(содержит «булычев» ИЛИ заканчивается на «Петров»)"
+    if description!=want {
+        t.Fatalf("user-facing filter expression = %q, want %q",description,want)
+    }
+    examples:=[]struct{value string;want bool}{
+        {"Кир Булычев",true},
+        {"Иван Петров",true},
+        {"Алексей Сидоров",false},
+        {"булычев-Петров",true},
+    }
+    for _,example:=range examples {
+        row:=ListItem{Values:map[string]string{"Договор":example.value}}
+        if got:=condition.Match(row,"Договор");got!=example.want {
+            t.Errorf("OR text match %q = %v, want %v",example.value,got,example.want)
+        }
+    }
+}

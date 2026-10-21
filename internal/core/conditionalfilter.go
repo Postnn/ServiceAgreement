@@ -45,7 +45,11 @@ type FilterCondition struct {
     Kind FilterKind
     Operator FilterOperator
     Value string
-    Value2 string
+    Value2 string // second boundary of Between/NotBetween, NOT a second condition
+    // Additional is a distinct optional comparison for the SAME SQL column.
+    // Row matches this column when FIRST OR Additional is true. Columns
+    // combine via AND in FilterConditionState.
+    Additional *FilterCondition
 }
 
 // FilterConditionState stores mutually exclusive alternatives to checkbox
@@ -64,6 +68,10 @@ func (s FilterConditionState) Get(field string) (FilterCondition,bool) {
 func (s FilterConditionState) Set(field string, c FilterCondition) error {
     if err:=c.Validate();err!=nil {return err}
     if s==nil {return fmt.Errorf("не инициализирован список условий фильтра")}
+    if c.Additional != nil {
+        second := *c.Additional
+        c.Additional = &second
+    }
     s[normalizeColumnAlias(field)] = c
     return nil
 }
@@ -162,6 +170,22 @@ func parseDateValue(v any) (time.Time,error) {
 }
 
 func (c FilterCondition) Validate() error {
+    if err:=c.validateSingle();err!=nil {return err}
+    if c.Additional!=nil {
+        if c.Additional.Additional!=nil {
+            return fmt.Errorf("поддерживается не более двух условий на колонку")
+        }
+        if c.Additional.Kind!=c.Kind {
+            return fmt.Errorf("оба условия колонки должны иметь один тип")
+        }
+        if err:=c.Additional.validateSingle();err!=nil {
+            return fmt.Errorf("второе условие: %w",err)
+        }
+    }
+    return nil
+}
+
+func (c FilterCondition) validateSingle() error {
     switch c.Kind {
     case FilterText:
         switch c.Operator {
@@ -201,6 +225,12 @@ func (c FilterCondition) Validate() error {
 }
 
 func (c FilterCondition) Description() string {
+    first:=c.descriptionSingle()
+    if c.Additional==nil {return first}
+    return "("+first+" ИЛИ "+c.Additional.descriptionSingle()+")"
+}
+
+func (c FilterCondition) descriptionSingle() string {
     var name string
     switch c.Operator {
     case FilterEqual:name="равно"
@@ -243,6 +273,11 @@ func compareNumber(op FilterOperator, cmp int) bool {
     return false
 }
 func (c FilterCondition) Match(row ListItem, field string) bool {
+    if c.matchSingle(row,field) {return true}
+    return c.Additional!=nil && c.Additional.matchSingle(row,field)
+}
+
+func (c FilterCondition) matchSingle(row ListItem, field string) bool {
     if c.Kind==FilterText {
         input:=strings.ToLower(row.Field(field))
         value:=strings.ToLower(c.Value)
@@ -293,9 +328,47 @@ func (c FilterCondition) Match(row ListItem, field string) bool {
     return false
 }
 
-// ApplyExcept combines different column predicates using AND. Dynamic
-// Top-N/average predicates compute their threshold from the already
-// restricted loaded rows. Iteration order is deterministic by alias.
+// conditionMatcher compiles a single comparison for one SQL column.
+// Top-N/average thresholds are calculated once from the SAME eligible rows
+// for both OR branches (rather than recomputing after the first branch).
+func conditionMatcher(c FilterCondition, field string, candidates []ListItem) func(ListItem) bool {
+    if c.Kind!=FilterNumber ||
+        (c.Operator!=FilterTop && c.Operator!=FilterAboveAverage && c.Operator!=FilterBelowAverage) {
+        return func(row ListItem) bool {return c.matchSingle(row,field)}
+    }
+    nums:=make([]*big.Rat,0,len(candidates))
+    for _,row:=range candidates {
+        if n,err:=parseNumber(row.SQLValue(field));err==nil {nums=append(nums,n)}
+    }
+    if len(nums)==0 {return func(ListItem)bool{return false}}
+    var threshold *big.Rat
+    if c.Operator==FilterTop {
+        sort.Slice(nums,func(i,j int)bool{return nums[i].Cmp(nums[j])>0})
+        count,err:=strconv.Atoi(strings.TrimSpace(c.Value))
+        if err!=nil || count<1 {return func(ListItem)bool{return false}}
+        if count>len(nums) {count=len(nums)}
+        threshold=nums[count-1]
+    }else{
+        total:=new(big.Rat)
+        for _,n:=range nums {total.Add(total,n)}
+        threshold=total.Quo(total,big.NewRat(int64(len(nums)),1))
+    }
+    return func(row ListItem) bool {
+        n,err:=parseNumber(row.SQLValue(field))
+        if err!=nil {return false}
+        cmp:=n.Cmp(threshold)
+        switch c.Operator {
+        case FilterTop:return cmp>=0
+        case FilterAboveAverage:return cmp>0
+        case FilterBelowAverage:return cmp<0
+        }
+        return false
+    }
+}
+
+// ApplyExcept joins different SQL columns with AND. Within a column,
+// a configured second condition is combined with OR, including if one
+// branch is an aggregate-based comparison such as Top N.
 func (s FilterConditionState) ApplyExcept(rows []ListItem, excluded string) []ListItem {
     if len(s)==0 {return rows}
     keys:=make([]string,0,len(s))
@@ -306,45 +379,16 @@ func (s FilterConditionState) ApplyExcept(rows []ListItem, excluded string) []Li
     for _,key:=range keys {
         c:=s[key]
         if len(out)==0 {return out}
-        var threshold *big.Rat
-        var dynamic bool
-        if c.Kind==FilterNumber &&
-            (c.Operator==FilterTop||c.Operator==FilterAboveAverage||c.Operator==FilterBelowAverage) {
-            dynamic=true
-            nums:=make([]*big.Rat,0,len(out))
-            for _,row:=range out {
-                if n,err:=parseNumber(row.SQLValue(key));err==nil {nums=append(nums,n)}
-            }
-            if len(nums)==0 {return []ListItem{}}
-            if c.Operator==FilterTop {
-                sort.Slice(nums,func(i,j int)bool{return nums[i].Cmp(nums[j])>0})
-                count,_:=strconv.Atoi(strings.TrimSpace(c.Value))
-                if count<1 {return []ListItem{}}
-                if count>len(nums) {count=len(nums)}
-                threshold=nums[count-1]
-            } else {
-                total:=new(big.Rat)
-                for _,v:=range nums {total.Add(total,v)}
-                threshold=total.Quo(total,big.NewRat(int64(len(nums)),1))
-            }
+        matchFirst:=conditionMatcher(c,key,out)
+        var matchSecond func(ListItem)bool
+        if c.Additional!=nil {
+            matchSecond=conditionMatcher(*c.Additional,key,out)
         }
         filtered:=make([]ListItem,0,len(out))
         for _,row:=range out {
-            keep:=false
-            if dynamic {
-                n,err:=parseNumber(row.SQLValue(key))
-                if err==nil {
-                    cmp:=n.Cmp(threshold)
-                    switch c.Operator {
-                    case FilterTop:keep=cmp>=0
-                    case FilterAboveAverage:keep=cmp>0
-                    case FilterBelowAverage:keep=cmp<0
-                    }
-                }
-            } else {
-                keep=c.Match(row,key)
+            if matchFirst(row) || matchSecond!=nil && matchSecond(row) {
+                filtered=append(filtered,row)
             }
-            if keep {filtered=append(filtered,row)}
         }
         out=filtered
     }

@@ -222,3 +222,41 @@ func TestExcelStyleTypedMenuOperators(t *testing.T) {
         }
     }
 }
+
+
+func TestComposeORFilterDialogInputs(t *testing.T) {
+    c,err:=composeORFilter(
+        core.FilterText,core.FilterContains,"Булычев","",
+        true,core.FilterStarts,"Документ","",
+    )
+    if err!=nil {t.Fatal(err)}
+    if c.Additional==nil || c.Additional.Operator!=core.FilterStarts ||
+        c.Value!="Булычев" || c.Additional.Value!="Документ" {
+        t.Fatalf("second input is not its own OR condition: %+v",c)
+    }
+    if text:=c.Description();text!="(содержит «Булычев» ИЛИ начинается с «Документ»)" {
+        t.Fatalf("human readable OR expression: %s",text)
+    }
+    number,err:=composeORFilter(
+        core.FilterNumber,core.FilterBetween,"10","20",
+        true,core.FilterGreater,"100","",
+    )
+    if err!=nil {t.Fatal(err)}
+    if number.Value2!="20" || number.Additional==nil ||
+        number.Additional.Value!="100" || number.Additional.Value2!="" {
+        t.Fatalf("BETWEEN boundary was confused with a second OR condition: %+v",number)
+    }
+    single,err:=composeORFilter(
+        core.FilterText,core.FilterContains,"договор","",
+        false,core.FilterGreater,"нельзя применять","",
+    )
+    if err!=nil || single.Additional!=nil {
+        t.Fatalf("unused second condition should remain absent: %+v err=%v",single,err)
+    }
+    if _,err:=composeORFilter(
+        core.FilterNumber,core.FilterGreater,"10","",
+        true,core.FilterLess,"некорректно","",
+    );err==nil {
+        t.Fatal("invalid optional second condition was accepted")
+    }
+}
