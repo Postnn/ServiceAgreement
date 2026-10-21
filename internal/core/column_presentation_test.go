@@ -130,3 +130,25 @@ func TestN2FormattingOnlyWhenAllCastedValuesAreNumeric(t *testing.T) {
         t.Fatal("mixed text column was partially formatted")
     }
 }
+
+
+func TestEmptyCastedMoneyColumnKeepsNumericFilterType(t *testing.T) {
+    for _,field:=range []string{"Amount","Абон.плата","СуммаАбонентскойПлаты"} {
+        rows:=[]ListItem{{
+            ColumnTypes:map[string]string{field:"NVARCHAR"},
+            Values:map[string]string{field:""},
+            Raw:map[string]any{field:nil},
+        }}
+        kind:=InferColumnPresentation(rows,field)
+        if !kind.Money || kind.Kind!=FilterNumber {
+            t.Errorf("empty monetary alias %q should still expose numeric filters: %+v",field,kind)
+        }
+    }
+    blank:=[]ListItem{{
+        ColumnTypes:map[string]string{"DocumentCode":"NVARCHAR"},
+        Raw:map[string]any{"DocumentCode":nil},
+    }}
+    if k:=InferColumnPresentation(blank,"DocumentCode");k.Kind!=FilterText {
+        t.Fatalf("empty non-money varchar should remain text: %+v",k)
+    }
+}

@@ -117,6 +117,7 @@ func InferColumnPresentation(rows []ListItem,field string) ColumnPresentation {
     }
 
     sawNumber:=false
+    sawNonblank:=false
     allNumeric:=true
     fourDecimal:=false
     sawRawDate:=false
@@ -130,6 +131,7 @@ func InferColumnPresentation(rows []ListItem,field string) ColumnPresentation {
         }
         source:=strings.TrimSpace(sqlText(raw))
         if source=="" {continue}
+        sawNonblank=true
         if _,err:=parseNumber(raw);err!=nil {
             allNumeric=false
             continue
@@ -156,9 +158,11 @@ func InferColumnPresentation(rows []ListItem,field string) ColumnPresentation {
     if sawNumber && allNumeric && sawRawNumber {
         return ColumnPresentation{Kind:FilterNumber}
     }
-    // No rows or all NULLs: the financial alias still indicates that its
-    // filter should offer numeric operators, ready for the next refresh.
-    if !sawNumber && isMonetaryAlias(field) && !isTextSQLType(sqlType) {
+    // No rows or all NULLs: a known financial alias (including the
+    // historical Amount name and Russian Абон.плата) must offer numeric
+    // operators even when a custom SELECT casts it to NVARCHAR.
+    // But never force money on a nonempty column containing actual words.
+    if !sawNonblank && isMonetaryAlias(field) {
         return ColumnPresentation{Kind:FilterNumber,Money:true}
     }
     return ColumnPresentation{Kind:FilterText}

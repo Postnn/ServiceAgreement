@@ -8,6 +8,7 @@ import (
     "testing"
 
     "github.com/Postnn/ServiceAgreement/internal/core"
+    . "github.com/lxn/walk/declarative"
     "github.com/lxn/walk"
 )
 
