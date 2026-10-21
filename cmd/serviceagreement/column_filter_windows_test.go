@@ -129,3 +129,56 @@ func TestRepeatedValueSearchDoesNotResetOnFocusLoss(t *testing.T) {
         t.Fatalf("new contains query not applied: rows=%d resets=%d",model.RowCount(),resets)
     }
 }
+
+func TestBulkCheckboxSelectionRedrawsVisibleRows(t *testing.T) {
+    all:=[]core.ColumnValueCount{
+        {Value:"A",Count:1},{Value:"B",Count:2},
+        {Value:"C",Count:3},{Value:"D",Count:4},
+    }
+    selected:=map[string]bool{"A":true,"B":true,"C":true,"D":true}
+    model:=newFilterValueModel(all,selected)
+    resets:=0
+    changes:=0
+    from,to:=-1,-1
+    notifications:=0
+    model.RowsReset().Attach(func(){resets++})
+    model.RowsChanged().Attach(func(first,last int){
+        changes++
+        from,to=first,last
+    })
+    model.changed=func(){notifications++}
+
+    model.selectVisible(false)
+    if model.selectedCount()!=0 || changes!=1 || from!=0 || to!=3 || resets!=0 || notifications!=1 {
+        t.Fatalf("uncheck-all did not redraw rows correctly: checked=%d changes=%d range=[%d,%d] resets=%d notices=%d",
+            model.selectedCount(),changes,from,to,resets,notifications)
+    }
+    for i:=0;i<model.RowCount();i++ {
+        if model.Checked(i) { t.Fatalf("checkbox %d was not cleared",i) }
+    }
+
+    model.selectVisible(true)
+    if model.selectedCount()!=4 || changes!=2 || resets!=0 || notifications!=2 {
+        t.Fatalf("select-all did not repaint the native state images: checked=%d changes=%d resets=%d",
+            model.selectedCount(),changes,resets)
+    }
+    for i:=0;i<model.RowCount();i++ {
+        if !model.Checked(i) {t.Fatalf("checkbox %d was not set",i)}
+    }
+
+    // No real state change: prevent spurious repaint bursts.
+    model.selectVisible(true)
+    if changes!=2 {t.Fatalf("redundant selection redrew rows: %d",changes)}
+
+    // With a local search, toggle only the visible values, preserve others.
+    model.search("B")
+    before:=changes
+    model.selectVisible(false)
+    if changes!=before+1 || model.RowCount()!=1 || model.Checked(0) {
+        t.Fatal("searched visible checkbox did not refresh")
+    }
+    model.search("")
+    if model.selectedCount()!=3 || model.Checked(1) {
+        t.Fatal("search-scoped toggle affected unrelated checkboxes")
+    }
+}

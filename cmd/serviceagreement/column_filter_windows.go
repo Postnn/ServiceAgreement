@@ -71,10 +71,25 @@ func (m *filterValueModel) search(query string) {
         }
     }
     m.PublishRowsReset()
+    // Search can change row content without changing row count. Walk may
+    // suppress list invalidation in that case, so explicitly repaint.
+    if m.changed!=nil {m.changed()}
 }
+// Bulk checkbox changes must publish RowsChanged, not RowsReset. Walk's
+// RowsReset calls LVM_SETITEMCOUNT with LVSICF_NOINVALIDATEALL, so the
+// Win32 ListView caches the old checkbox state until mouse hover. In
+// contrast RowsChanged invalidates every visible state image immediately.
 func (m *filterValueModel) selectVisible(state bool) {
-    for _,i:=range m.indices {m.checked[m.values[i].Value]=state}
-    m.PublishRowsReset()
+    changed := false
+    for _, i := range m.indices {
+        value := m.values[i].Value
+        if m.checked[value] == state { continue }
+        m.checked[value] = state
+        changed = true
+    }
+    if changed && len(m.indices)>0 {
+        m.PublishRowsChanged(0,len(m.indices)-1)
+    }
     if m.changed!=nil {m.changed()}
 }
 func (m *filterValueModel) selectedCount() int {
@@ -145,11 +160,17 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
     model,table:=a.model,a.table
     if unconfigured {model,table=a.withoutModel,a.withoutTable}
     if model==nil || table==nil || index<0 || index>=len(model.columns) {return}
+    if model.filters==nil {
+        model.filters=make(core.ColumnFilterState)
+    }
     col:=model.columns[index]
     field:=col.Field
-    source:=core.ColumnValues(model.allItems,field)
+    // Cascade like Excel: list only values which survive every OTHER
+    // active column restriction. Exclude this column's own filter, so
+    // the user can expand or change an already filtered column.
+    source:=model.filters.FacetedValues(model.allItems,field)
     selected:=make(map[string]bool,len(source))
-    allowed,active:=model.filters[strings.ToLower(field)]
+    allowed,active:=model.filters[strings.ToLower(strings.TrimSpace(field))]
     for _,v:=range source {
         selected[v.Value]=!active || allowed[v.Value]
     }
@@ -165,7 +186,15 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                 values.selectedCount(),len(source),len(model.allItems)))
         }
     }
-    values.changed=setStatus
+    values.changed=func() {
+        setStatus()
+        // Force the native checkbox state image to repaint immediately.
+        // Walk's virtual ListView does not always redraw checkbox state
+        // after changing the model until the cursor moves over the row.
+        if entries!=nil {
+            _=entries.Invalidate()
+        }
+    }
 
     applyAndClose:=func(clearAll,clearColumn bool){
         if clearAll {
@@ -175,6 +204,8 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         } else {
             model.filters.Set(field,values.selectedValues())
         }
+        // Preserve every other column filter: only the selected facet is
+        // changed above, and filtering is the AND of all active facets.
         model.applyFilters()
         a.updateColumnFilterTitles(table,model)
         a.updateFilteredStatus(unconfigured)
@@ -217,8 +248,12 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                             if searchBox!=nil {values.search(searchBox.Text())}
                         }},
                     Composite{Layout:HBox{MarginsZero:true,Spacing:6},Children:[]Widget{
-                        PushButton{Text:"Выбрать всё",OnClicked:func(){values.selectVisible(true)}},
-                        PushButton{Text:"Снять всё",OnClicked:func(){values.selectVisible(false)}},
+                        PushButton{Text:"Выбрать всё",
+                            ToolTipText:"Отметить все отображаемые значения (при поиске — только найденные)",
+                            OnClicked:func(){values.selectVisible(true)}},
+                        PushButton{Text:"Снять всё",
+                            ToolTipText:"Снять отметки с отображаемых значений (при поиске — только найденные)",
+                            OnClicked:func(){values.selectVisible(false)}},
                         HSpacer{},
                     }},
                     TableView{

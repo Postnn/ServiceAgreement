@@ -50,20 +50,43 @@ func (s ColumnFilterState) KeepFields(columns []ListColumn) {
     }
 }
 
+// Apply evaluates all active column restrictions using AND logic.
 func (s ColumnFilterState) Apply(rows []ListItem) []ListItem {
-    if len(s)==0 {return rows}
-    result:=make([]ListItem,0,len(rows))
-    for _,row:=range rows {
-        accepted:=true
-        for alias,allowed:=range s {
+    return s.ApplyExcept(rows, "")
+}
+
+// ApplyExcept evaluates every active filter EXCEPT the named column.
+// This is essential for Excel-style cascading filter checklists: the
+// available values in column B depend on filters for A and C, but not B's
+// own current selection, so users can change or broaden B's selection.
+func (s ColumnFilterState) ApplyExcept(rows []ListItem, excludedField string) []ListItem {
+    if len(s)==0 { return rows }
+    excluded := normalizeColumnAlias(excludedField)
+    hasOther := false
+    for alias := range s {
+        if alias != excluded { hasOther = true; break }
+    }
+    if !hasOther { return rows }
+    result := make([]ListItem, 0, len(rows))
+    for _, row := range rows {
+        accepted := true
+        for alias, allowed := range s {
+            if alias == excluded { continue }
             if !allowed[row.Field(alias)] {
-                accepted=false
+                accepted = false
                 break
             }
         }
-        if accepted {result=append(result,row)}
+        if accepted { result = append(result,row) }
     }
     return result
+}
+
+// FacetedValues returns distinct values and counts for a particular column,
+// restricted by the OTHER columns' active filters. No SQL round-trip occurs;
+// the source is the loaded list (up to list_limit).
+func (s ColumnFilterState) FacetedValues(rows []ListItem, field string) []ColumnValueCount {
+    return ColumnValues(s.ApplyExcept(rows, field), field)
 }
 
 // ColumnValueCount describes a distinct value in loaded SQL data.
