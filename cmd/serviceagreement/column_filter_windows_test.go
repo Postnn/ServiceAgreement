@@ -101,3 +101,31 @@ func TestSearchWithinColumnValuesUsesLocalContains(t *testing.T) {
     values.search("")
     if values.RowCount()!=3 {t.Fatal("clearing search must restore the checklist")}
 }
+
+
+func TestRepeatedValueSearchDoesNotResetOnFocusLoss(t *testing.T) {
+    all:=[]core.ColumnValueCount{
+        {Value:"Договор оказания услуг",Count:2},
+        {Value:"Заявка на оплату",Count:1},
+        {Value:"Договор аренды",Count:3},
+    }
+    model:=newFilterValueModel(all,map[string]bool{
+        "Договор оказания услуг":true,
+        "Заявка на оплату":true,
+        "Договор аренды":true,
+    })
+    resets:=0
+    model.RowsReset().Attach(func(){resets++})
+    model.search("") // initial blank search; this is the focus-loss before sort
+    if resets!=0 {t.Fatalf("unchanged blank search caused %d unnecessary resets",resets)}
+    model.search("дОгОвОр")
+    if model.RowCount()!=2 || resets!=1 {
+        t.Fatalf("substring query failed; rows=%d resets=%d",model.RowCount(),resets)
+    }
+    model.search("ДОГОВОР") // Enter + WM_KILLFOCUS must not trigger another reset
+    if resets!=1 {t.Fatalf("duplicate EditingFinished reset rows during button click: %d",resets)}
+    model.search("оплат")
+    if model.RowCount()!=1 || resets!=2 || model.Value(0,0)!="Заявка на оплату" {
+        t.Fatalf("new contains query not applied: rows=%d resets=%d",model.RowCount(),resets)
+    }
+}

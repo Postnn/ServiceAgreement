@@ -66,6 +66,8 @@ type application struct {
 	withoutModel   *tableModel
 	withoutSortField string
 	withoutSortDescending bool
+    filterPopupQueued bool
+    filterPopupOpen bool
 	sortField      string
 	sortDescending bool
 }
@@ -152,7 +154,7 @@ func run() error {
 					Layout: VBox{Margins: Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 8},
 					Children: []Widget{
 						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-							Label{Text: "Поиск по коду или названию:"},
+							Label{Text: "Поиск по договору:"},
 							LineEdit{AssignTo: &app.withoutSearch, CueBanner: "Код или название; Enter — искать",
 								OnKeyDown: func(key walk.Key) {
 									if key == walk.KeyReturn { app.refreshWithout() }
@@ -179,8 +181,8 @@ func run() error {
 	}
 	app.table.SetColumnsOrderable(false)
     app.withoutTable.SetColumnsOrderable(false)
-    app.table.ColumnClicked().Attach(func(i int){app.showColumnFilter(i,false)})
-    app.withoutTable.ColumnClicked().Attach(func(i int){app.showColumnFilter(i,true)})
+    app.table.ColumnClicked().Attach(func(i int){app.queueColumnFilter(i,false)})
+    app.withoutTable.ColumnClicked().Attach(func(i int){app.queueColumnFilter(i,true)})
 	if loadErr != nil {
 		app.status.SetText("Требуется настройка config.json — нажмите значок ⚙ справа вверху")
 	} else if err := app.connect(cfg); err != nil {

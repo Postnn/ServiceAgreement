@@ -20,6 +20,11 @@ type filterValueModel struct {
     indices []int
     checked map[string]bool
     changed func()
+    // WM_KILLFOCUS and Enter can both emit EditingFinished. Repeating an
+    // identical filter would reset the checklist during the first button
+    // click and interfere with the native Windows mouse activation.
+    lastSearch string
+    searchInitialized bool
 }
 
 func newFilterValueModel(all []core.ColumnValueCount, checked map[string]bool) *filterValueModel {
@@ -53,6 +58,11 @@ func (m *filterValueModel) SetChecked(index int, state bool) error {
 }
 func (m *filterValueModel) search(query string) {
     q:=strings.ToLower(strings.TrimSpace(query))
+    if m.searchInitialized && q==m.lastSearch {
+        return
+    }
+    m.searchInitialized=true
+    m.lastSearch=q
     m.indices=m.indices[:0]
     for i,val:=range m.values {
         if q=="" || strings.Contains(strings.ToLower(val.Value),q) ||
@@ -105,6 +115,26 @@ func (a *application) updateFilteredStatus(unconfigured bool) {
         msg+=fmt.Sprintf(" · активных фильтров: %d",count)
     }
     status.SetText(msg)
+}
+
+// queueColumnFilter opens the modal only after Walk finishes processing
+// the table header's native WM_NOTIFY / column-click message. Opening a modal
+// from inside that notification can make the first subsequent mouse click
+// activate a button without executing its OnClicked handler.
+func (a *application) queueColumnFilter(index int, unconfigured bool) {
+    if a.win == nil || a.filterPopupQueued || a.filterPopupOpen {
+        return
+    }
+    a.filterPopupQueued = true
+    a.win.Synchronize(func() {
+        a.filterPopupQueued = false
+        if a.filterPopupOpen {
+            return
+        }
+        a.filterPopupOpen = true
+        defer func() { a.filterPopupOpen = false }()
+        a.showColumnFilter(index, unconfigured)
+    })
 }
 
 // Each title displays an Excel-style down arrow (▾). Clicking the header
