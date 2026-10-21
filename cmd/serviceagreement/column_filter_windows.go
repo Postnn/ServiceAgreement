@@ -152,12 +152,12 @@ func (a *application) updateFilteredStatus(unconfigured bool) {
     if details!=nil {
         summary:=filterSummaryText(model)
         if summary=="" {
-            _=details.SetVisible(false)
+            details.SetVisible(false)
             _=details.SetText("")
         }else{
             // Native Win32 EDIT controls expect CRLF to display new lines.
             _=details.SetText(strings.ReplaceAll(summary,"\n","\r\n"))
-            _=details.SetVisible(true)
+            details.SetVisible(true)
         }
     }
 }
@@ -369,15 +369,15 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         secondOp,secondActive:=currentSecondOperation()
         showFirstValue,showFirstBoundary:=editorInputVisibility(firstOp,firstActive)
         showSecondValue,showSecondBoundary:=editorInputVisibility(secondOp,secondActive)
-        if valueOne!=nil {_=valueOne.SetVisible(showFirstValue)}
-        if valueOneBoundary!=nil {_=valueOneBoundary.SetVisible(showFirstBoundary)}
-        if valueTwo!=nil {_=valueTwo.SetVisible(showSecondValue)}
-        if valueTwoBoundary!=nil {_=valueTwoBoundary.SetVisible(showSecondBoundary)}
+        if valueOne!=nil {valueOne.SetVisible(showFirstValue)}
+        if valueOneBoundary!=nil {valueOneBoundary.SetVisible(showFirstBoundary)}
+        if valueTwo!=nil {valueTwo.SetVisible(showSecondValue)}
+        if valueTwoBoundary!=nil {valueTwoBoundary.SetVisible(showSecondBoundary)}
         if valueHeader!=nil {
-            _=valueHeader.SetVisible(showFirstValue || showSecondValue)
+            valueHeader.SetVisible(showFirstValue || showSecondValue)
         }
         if boundaryHeader!=nil {
-            _=boundaryHeader.SetVisible(showFirstBoundary || showSecondBoundary)
+            boundaryHeader.SetVisible(showFirstBoundary || showSecondBoundary)
         }
         if firstActive && firstOp==core.FilterTop && valueOne!=nil &&
             strings.TrimSpace(valueOne.Text())=="" {
@@ -395,8 +395,8 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
     updateMode:=func() {
         if modeBox==nil || uniqueGroup==nil || conditionGroup==nil {return}
         useConditions:=modeBox.CurrentIndex()==1
-        _=uniqueGroup.SetVisible(!useConditions)
-        _=conditionGroup.SetVisible(useConditions)
+        uniqueGroup.SetVisible(!useConditions)
+        conditionGroup.SetVisible(useConditions)
         if useConditions {updateOperation()}
     }
     setStatus:=func() {
