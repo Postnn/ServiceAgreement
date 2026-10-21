@@ -103,6 +103,32 @@ func (m *filterValueModel) selectedValues() map[string]bool {
     return selected
 }
 
+// The two filter modes have different natural heights. A single large
+// fixed-size dialog leaves empty vertical bands when the checkbox list is
+// hidden, so keep a generous width but shrink only the condition mode.
+const (
+    filterPopupWidth = 680
+    filterConditionHeight = 405
+    filterValueListHeight = 570
+)
+
+func filterPopupSize(conditions bool) walk.Size {
+    height:=filterValueListHeight
+    if conditions {height=filterConditionHeight}
+    return walk.Size{Width:filterPopupWidth,Height:height}
+}
+
+// Preserve the center of the dialog while switching between two modes
+// instead of expanding or shrinking exclusively toward the lower-right.
+func filterPopupCenteredBounds(current walk.Rectangle, conditions bool) walk.Rectangle {
+    target:=filterPopupSize(conditions)
+    return walk.Rectangle{
+        X:current.X+(current.Width-target.Width)/2,
+        Y:current.Y+(current.Height-target.Height)/2,
+        Width:target.Width,Height:target.Height,
+    }
+}
+
 func filterHeaderTitle(col core.ListColumn, active bool) string {
     if active { return col.Title + "  ●▾" }
     return col.Title + "  ▾"
@@ -398,6 +424,12 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
         uniqueGroup.SetVisible(!useConditions)
         conditionGroup.SetVisible(useConditions)
         if useConditions {updateOperation()}
+        // Layout is re-evaluated with only the visible group, then resize
+        // the form to the mode's content height. No large blank area above
+        // the tabs or below the action buttons.
+        if dlg!=nil {
+            _=dlg.SetBounds(filterPopupCenteredBounds(dlg.Bounds(),useConditions))
+        }
     }
     setStatus:=func() {
         if selectedLabel!=nil {
@@ -501,20 +533,23 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
             initialSecondBoundary=previous.Additional.Value2
         }
     }
+    initialSize:=filterPopupSize(modeIndex==1)
     err:=Dialog{
         AssignTo:&dlg,
         Title:"Фильтр: "+col.Title,
         Icon:a.appIcon,
-        MinSize:Size{Width:680,Height:600},
-        Size:Size{Width:740,Height:780},
-        Layout:VBox{Margins:Margins{Left:12,Top:10,Right:12,Bottom:12},Spacing:7},
+        MinSize:Size{Width:660,Height:380},
+        Size:Size{Width:initialSize.Width,Height:initialSize.Height},
+        Layout:VBox{Margins:Margins{Left:12,Top:10,Right:12,Bottom:10},Spacing:6},
         Children:[]Widget{
             Composite{Layout:HBox{MarginsZero:true,Spacing:7},Children:[]Widget{
                 PushButton{Text:"↑  По возрастанию",OnClicked:func(){sortAndClose(false)}},
                 PushButton{Text:"↓  По убыванию",OnClicked:func(){sortAndClose(true)}},
                 HSpacer{},
             }},
-            Label{AssignTo:&currentFilterLabel,Text:textStatus,ToolTipText:textStatus},
+            Label{AssignTo:&currentFilterLabel,Text:textStatus,
+                EllipsisMode:EllipsisEnd,
+                ToolTipText:textStatus,MaxSize:Size{Width:630}},
             Composite{Layout:HBox{MarginsZero:true,Spacing:8},Children:[]Widget{
                 Label{Text:"Режим фильтрации:"},
                 ComboBox{AssignTo:&modeBox,
@@ -527,7 +562,8 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                 AssignTo:&uniqueGroup,
                 Title:"Выбор уникальных значений",
                 Visible:modeIndex==0,
-                Layout:VBox{Margins:Margins{Left:8,Top:10,Right:8,Bottom:8},Spacing:6},
+                MinSize:Size{Height:335},
+                Layout:VBox{Margins:Margins{Left:8,Top:10,Right:8,Bottom:8},Spacing:5},
                 Children:[]Widget{
                     LineEdit{AssignTo:&searchBox,CueBanner:"Поиск среди значений...",
                         ToolTipText:"Поиск локально по подстроке, запускается по Enter или потере фокуса.",
@@ -544,6 +580,7 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                     TableView{
                         AssignTo:&entries,
                         Model:values,CheckBoxes:true,
+                        MinSize:Size{Height:245},
                         AlternatingRowBG:true,MultiSelection:false,
                         NotSortableByHeaderClick:true,ColumnsOrderable:false,
                         Columns:[]TableViewColumn{
@@ -558,7 +595,8 @@ func (a *application) showColumnFilter(index int, unconfigured bool) {
                 AssignTo:&conditionGroup,
                 Title:filterKindCaption(kind)+" — по введённому значению",
                 Visible:modeIndex==1,
-                Layout:VBox{Margins:Margins{Left:8,Top:10,Right:8,Bottom:8},Spacing:6},
+                MinSize:Size{Height:155},MaxSize:Size{Height:192},
+                Layout:VBox{Margins:Margins{Left:8,Top:10,Right:8,Bottom:8},Spacing:5},
                 Children:[]Widget{
                     // Fixed column widths guarantee that every operator and
                     // its operands line up in two rows at all dialog sizes.

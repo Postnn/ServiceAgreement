@@ -8,6 +8,7 @@ import (
     "testing"
 
     "github.com/Postnn/ServiceAgreement/internal/core"
+    "github.com/lxn/walk"
 )
 
 func TestFilterValueModelChecksAndSearch(t *testing.T) {
@@ -375,5 +376,38 @@ func TestClearActiveFilterWhileDialogRemainsOpen(t *testing.T) {
     }
     if got:=filterSummaryText(m);got!="" {
         t.Fatalf("typed filter summary remains after clearing: %s",got)
+    }
+}
+
+func TestFilterDialogFitsCurrentContentMode(t *testing.T) {
+    condition:=filterPopupSize(true)
+    checklist:=filterPopupSize(false)
+    if condition.Width!=checklist.Width {
+        t.Fatalf("dialog should keep convenient consistent width: condition=%v unique=%v",condition,checklist)
+    }
+    if condition.Width<650 || condition.Width>730 {
+        t.Fatalf("dialog should be wide enough for range controls but not oversized: %v",condition)
+    }
+    if condition.Height<390 || condition.Height>450 {
+        t.Fatalf("condition-only dialog is not compact: %v",condition)
+    }
+    if checklist.Height<530 || checklist.Height>610 {
+        t.Fatalf("value checklist must remain a comfortable height: %v",checklist)
+    }
+    if checklist.Height-condition.Height<100 {
+        t.Fatalf("hidden checkbox list has not reclaimed enough vertical space: %v %v",condition,checklist)
+    }
+    initial:=walk.Rectangle{X:220,Y:140,Width:checklist.Width,Height:checklist.Height}
+    smaller:=filterPopupCenteredBounds(initial,true)
+    if smaller.Width!=condition.Width || smaller.Height!=condition.Height {
+        t.Fatalf("modal shrink dimensions incorrect: %v",smaller)
+    }
+    if smaller.Y <= initial.Y || smaller.X!=initial.X {
+        t.Fatalf("shrinking dialog should preserve center, not pin upper-left: %v->%v",initial,smaller)
+    }
+    restored:=filterPopupCenteredBounds(smaller,false)
+    if restored.Width!=initial.Width || restored.Height!=initial.Height ||
+        restored.X!=initial.X || restored.Y!=initial.Y {
+        t.Fatalf("modal switched back without preserving position: initial=%v, restored=%v",initial,restored)
     }
 }
