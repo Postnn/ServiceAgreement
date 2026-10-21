@@ -2,153 +2,135 @@ package core
 
 import (
     "reflect"
-    "strings"
     "testing"
 )
 
-func monetarySampleRows() []ListItem {
-    originals:=[]string{"0.0000","2222.0000","4520.4600","99.0000","500.0000","0.0000","1150.2400"}
-    rows:=make([]ListItem,0,len(originals))
-    for i,v:=range originals {
+func presentationRows(sqlType string) []ListItem {
+    vals:=[]string{"0.0000","2222.0000","4520.4600","99.0000","500.0000","0.0000","1150.2400"}
+    rows:=make([]ListItem,0,len(vals))
+    for i,raw:=range vals {
         rows=append(rows,ListItem{
             ID:i+1,
-            Values:map[string]string{
-                "Абон.плата":v,"DocumentCode":"0001",
-            },
-            Raw:map[string]any{
-                "Абон.плата":[]byte(v),"DocumentCode":[]byte("0001"),
-            },
-            ColumnTypes:map[string]string{
-                "Абон.плата":"NVARCHAR",
-                "DocumentCode":"NVARCHAR",
-            },
+            Values:map[string]string{"Абон.плата":raw,"DocumentCode":"0001"},
+            Raw:map[string]any{"Абон.плата":[]byte(raw),"DocumentCode":[]byte("0001")},
+            ColumnTypes:map[string]string{"Абон.плата":sqlType,"DocumentCode":"NVARCHAR"},
         })
     }
     return rows
 }
 
-func TestCastedMoneyTypeDetectedFromNumericValuesAndRussianAlias(t *testing.T) {
-    rows:=monetarySampleRows()
-    p:=InferColumnPresentation(rows,"абон.ПЛАТА")
-    if p.Kind!=FilterNumber || !p.Money {
-        t.Fatalf("Abon.plata was treated as text: %+v",p)
-    }
-    if got:=DetectFilterKind(rows,"Абон.плата");got!=FilterNumber {
-        t.Fatalf("Filter must expose numeric operators: %s",got)
-    }
-    if other:=InferColumnPresentation(rows,"DocumentCode");other.Kind!=FilterText || other.Money {
-        t.Fatalf("varchar document code must remain text (including leading zeros): %+v",other)
-    }
-
-    FormatListMoneyN2(rows)
-    want:=[]string{
-        "0,00","2\u00a0222,00","4\u00a0520,46","99,00",
-        "500,00","0,00","1\u00a0150,24",
-    }
-    actual:=make([]string,len(rows))
-    for i,r:=range rows {
-        actual[i]=r.Field("АБОН.ПЛАТА")
-        if r.Field("DocumentCode")!="0001" {
-            t.Fatalf("text columns must not be mutated: %v",r.Values)
+func TestMoneyFormattingRequiresSQLMoneyType(t *testing.T) {
+    for _,field:=range []string{"Абон.плата","Amount","Random"} {
+        for _,dbType:=range []string{"NVARCHAR","VARCHAR","DECIMAL","NUMERIC","FLOAT","SMALLMONEY"} {
+            rows:=[]ListItem{{
+                Values:map[string]string{field:"2222.0000"},
+                Raw:map[string]any{field:[]byte("2222.0000")},
+                ColumnTypes:map[string]string{field:dbType},
+            }}
+            p:=InferColumnPresentation(rows,field)
+            if p.Money {t.Fatalf("%s with %s must not get MONEY N2: %+v",field,dbType,p)}
+            if dbType=="NVARCHAR"||dbType=="VARCHAR" {
+                if p.Kind!=FilterText {t.Errorf("%s/%s must be a textual filter, got %q",field,dbType,p.Kind)}
+            }else if p.Kind!=FilterNumber {
+                t.Errorf("%s/%s is SQL numeric but filter kind %q",field,dbType,p.Kind)
+            }
+            FormatListMoneyN2(rows)
+            if got:=rows[0].Field(field);got!="2222.0000" {
+                t.Fatalf("%s / %s was wrongly reformatted to %q",field,dbType,got)
+            }
         }
-        original:=strings.TrimSpace(sqlText(r.SQLValue("Абон.плата")))
-        if original!=strings.TrimSpace(string(r.Raw["Абон.плата"].([]byte))) {
-            t.Fatalf("Money values must remain unrounded for numeric sorting: %q",original)
-        }
-    }
-    if !reflect.DeepEqual(actual,want) {
-        t.Fatalf("N2 amounts as shown in screenshot: got %q, want %q",actual,want)
-    }
-    if err:=ValidateColumnPresentation(rows,"Абон.плата");err!=nil {t.Fatal(err)}
-
-    // The distinct-values popup must use exactly the same displayed N2
-    // strings as the main table (including grouping equal amounts).
-    choices:=ColumnValues(rows,"Абон.плата")
-    counts:=map[string]int{}
-    for _,c:=range choices { counts[c.Value]=c.Count }
-    if counts["0,00"]!=2 ||
-        counts["2\u00a0222,00"]!=1 ||
-        counts["1\u00a0150,24"]!=1 {
-        t.Fatalf("N2 checklist values or counts are inconsistent: %+v",choices)
-    }
-
-    cond:=FilterCondition{Kind:FilterNumber,Operator:FilterGreater,Value:"999"}
-    filtered:=FilterConditionState{"абон.плата":cond}.Apply(rows)
-    if got:=ids(filtered);!reflect.DeepEqual(got,[]int{2,3,7}) {
-        t.Fatalf("typed filter must compare unrounded raw values: %v",got)
     }
 }
 
-func TestMoneyInferenceUsesSQLTypeAndNumericEvidence(t *testing.T) {
-    cases:=[]struct{
-        name,alias,sqlType,stringValue string
-        expected FilterKind
-        money bool
-    }{
-        {"native-money","Cost","MONEY","4567.2500",FilterNumber,true},
-        {"sql-smallmoney","Fee","SMALLMONEY","42.0000",FilterNumber,true},
-        {"cast-as-text","Абон.плата","NVARCHAR","1150.2400",FilterNumber,true},
-        {"different-alias-cast","PaidValue","NVARCHAR","0.0000",FilterNumber,true},
-        {"native-int","ServicePeriod","INT","12",FilterNumber,false},
-        {"native-date","SignedAt","DATE","2026-10-21",FilterDate,false},
-        {"date-as-varchar","SignedAt","NVARCHAR","21.10.2026",FilterText,false},
-        {"plain-numeric-string","DocumentCode","NVARCHAR","0012",FilterText,false},
-        {"mixed-text","Абон.плата","NVARCHAR","Не определено",FilterText,false},
-        {"non-financial-description","PaymentText","NVARCHAR","Оплата: 120",FilterText,false},
+func TestSQLMoneyFormattingIsIndependentOfAlias(t *testing.T) {
+    for _,alias:=range []string{"Абон.плата","Amount","Random"} {
+        rows:=[]ListItem{{
+            Values:map[string]string{alias:"2222.0000"},
+            Raw:map[string]any{alias:[]byte("2222.0000")},
+            ColumnTypes:map[string]string{alias:"MONEY"},
+        }}
+        p:=InferColumnPresentation(rows,alias)
+        if p.Kind!=FilterNumber || !p.Money {t.Fatalf("MONEY alias %s detected as %+v",alias,p)}
+        FormatListMoneyN2(rows)
+        if got:=rows[0].Field(alias);got!="2\u00a0222,00" {
+            t.Fatalf("MONEY alias %s didn't get N2: %q",alias,got)
+        }
+        if raw:=sqlText(rows[0].SQLValue(alias));raw!="2222.0000" {
+            t.Fatalf("display formatting modified raw SQL value: %q",raw)
+        }
+    }
+}
+
+func TestMoneyInDistinctValuesOnlyWhenSQLTypeIsMoney(t *testing.T) {
+    castRows:=presentationRows("NVARCHAR")
+    moneyRows:=presentationRows("MONEY")
+    if kind:=DetectFilterKind(castRows,"Абон.плата");kind!=FilterText {
+        t.Fatalf("casted money must be textual when SQL returns NVARCHAR: %s",kind)
+    }
+    if kind:=DetectFilterKind(moneyRows,"Абон.плата");kind!=FilterNumber {
+        t.Fatalf("MONEY must be numeric: %s",kind)
+    }
+    FormatListMoneyN2(castRows)
+    FormatListMoneyN2(moneyRows)
+    castGot:=[]string{}
+    moneyGot:=[]string{}
+    for i:=range castRows {
+        castGot=append(castGot,castRows[i].Field("Абон.плата"))
+        moneyGot=append(moneyGot,moneyRows[i].Field("Абон.плата"))
+        if castRows[i].Field("Абон.плата")!=sqlText(castRows[i].SQLValue("Абон.плата")) {
+            t.Fatal("text column was modified")
+        }
+    }
+    moneyWant:=[]string{"0,00","2\u00a0222,00","4\u00a0520,46","99,00","500,00","0,00","1\u00a0150,24"}
+    if !reflect.DeepEqual(moneyGot,moneyWant) {t.Fatalf("MONEY N2: %v expected %v",moneyGot,moneyWant)}
+    if !reflect.DeepEqual(castGot,[]string{"0.0000","2222.0000","4520.4600","99.0000","500.0000","0.0000","1150.2400"}) {
+        t.Fatalf("text values were modified: %v",castGot)
+    }
+    unique:=ColumnValues(moneyRows,"Абон.плата")
+    counts:=map[string]int{}
+    for _,v:=range unique {counts[v.Value]=v.Count}
+    if counts["0,00"]!=2 || counts["2\u00a0222,00"]!=1 {t.Fatalf("N2 distinct values: %v",unique)}
+    uniqueText:=ColumnValues(castRows,"Абон.плата")
+    counts=map[string]int{}
+    for _,v:=range uniqueText {counts[v.Value]=v.Count}
+    if counts["0.0000"]!=2 || counts["2222.0000"]!=1 {t.Fatalf("text distinct values modified: %v",uniqueText)}
+}
+
+func TestEmptySQLMoneyAndTextStayDistinct(t *testing.T) {
+    for _,field:=range []string{"Amount","Абон.плата","СуммаАбонентскойПлаты"} {
+        for _,dbType:=range []string{"NVARCHAR","MONEY"} {
+            rows:=[]ListItem{{ColumnTypes:map[string]string{field:dbType},
+                Values:map[string]string{field:""},Raw:map[string]any{field:nil}}}
+            p:=InferColumnPresentation(rows,field)
+            expectedMoney:=dbType=="MONEY"
+            if p.Money!=expectedMoney {t.Fatalf("empty %s/%s: %+v",field,dbType,p)}
+            expectedKind:=FilterText
+            if expectedMoney {expectedKind=FilterNumber}
+            if p.Kind!=expectedKind {t.Fatalf("empty %s/%s wrong kind: %+v",field,dbType,p)}
+        }
+    }
+}
+
+func TestTypedSQLDateNumericAndTextClassification(t *testing.T) {
+    cases:=[]struct{typ string;kind FilterKind;money bool}{
+        {"MONEY",FilterNumber,true},
+        {"SMALLMONEY",FilterNumber,false},
+        {"DECIMAL",FilterNumber,false},
+        {"NUMERIC",FilterNumber,false},
+        {"INT",FilterNumber,false},
+        {"FLOAT",FilterNumber,false},
+        {"DATE",FilterDate,false},
+        {"DATETIME2",FilterDate,false},
+        {"NVARCHAR",FilterText,false},
+        {"VARCHAR",FilterText,false},
     }
     for _,tc:=range cases {
-        t.Run(tc.name,func(t *testing.T){
-            row:=ListItem{
-                Values:map[string]string{tc.alias:tc.stringValue},
-                Raw:map[string]any{tc.alias:[]byte(tc.stringValue)},
-                ColumnTypes:map[string]string{tc.alias:tc.sqlType},
-            }
-            value:=InferColumnPresentation([]ListItem{row},tc.alias)
-            if value.Kind!=tc.expected || value.Money!=tc.money {
-                t.Fatalf("%s / %q => %+v, want %s money=%v",
-                    tc.sqlType,tc.stringValue,value,tc.expected,tc.money)
-            }
-        })
-    }
-}
-
-func TestN2FormattingOnlyWhenAllCastedValuesAreNumeric(t *testing.T) {
-    rows:=[]ListItem{
-        {Values:map[string]string{"Абон.плата":"100.0000"},
-            Raw:map[string]any{"Абон.плата":[]byte("100.0000")},
-            ColumnTypes:map[string]string{"Абон.плата":"NVARCHAR"}},
-        {Values:map[string]string{"Абон.плата":"Ошибка"},
-            Raw:map[string]any{"Абон.плата":[]byte("Ошибка")},
-            ColumnTypes:map[string]string{"Абон.плата":"NVARCHAR"}},
-    }
-    if k:=InferColumnPresentation(rows,"Абон.плата");k.Kind!=FilterText || k.Money {
-        t.Fatalf("mixed text column should remain text: %+v",k)
-    }
-    FormatListMoneyN2(rows)
-    if rows[0].Field("Абон.плата")!="100.0000" ||
-        rows[1].Field("Абон.плата")!="Ошибка" {
-        t.Fatal("mixed text column was partially formatted")
-    }
-}
-
-
-func TestEmptyCastedMoneyColumnKeepsNumericFilterType(t *testing.T) {
-    for _,field:=range []string{"Amount","Абон.плата","СуммаАбонентскойПлаты"} {
-        rows:=[]ListItem{{
-            ColumnTypes:map[string]string{field:"NVARCHAR"},
-            Values:map[string]string{field:""},
-            Raw:map[string]any{field:nil},
-        }}
-        kind:=InferColumnPresentation(rows,field)
-        if !kind.Money || kind.Kind!=FilterNumber {
-            t.Errorf("empty monetary alias %q should still expose numeric filters: %+v",field,kind)
+        r:=[]ListItem{{ColumnTypes:map[string]string{"X":tc.typ},
+            Values:map[string]string{"X":"1234.0000"},
+            Raw:map[string]any{"X":[]byte("1234.0000")}}}
+        p:=InferColumnPresentation(r,"X")
+        if p.Kind!=tc.kind || p.Money!=tc.money {
+            t.Errorf("%s: %+v expected %+v",tc.typ,p,tc)
         }
-    }
-    blank:=[]ListItem{{
-        ColumnTypes:map[string]string{"DocumentCode":"NVARCHAR"},
-        Raw:map[string]any{"DocumentCode":nil},
-    }}
-    if k:=InferColumnPresentation(blank,"DocumentCode");k.Kind!=FilterText {
-        t.Fatalf("empty non-money varchar should remain text: %+v",k)
     }
 }

@@ -21,17 +21,21 @@ func TestMoneyDisplayN2RussianFormat(t *testing.T) {
         }
     }
 }
-func TestSQLDisplayValueFormatsMoneyBySQLType(t *testing.T) {
-    for _,typ:=range []string{"MONEY","SMALLMONEY","money"} {
+func TestSQLDisplayValueFormatsOnlySQLMoney(t *testing.T) {
+    for _,typ:=range []string{"MONEY","money"," Money "} {
         if got:=SQLDisplayValue("4567.2500",typ,"ServiceFee");got!="4\u00a0567,25" {
             t.Errorf("%s: %q",typ,got)
         }
     }
-    if got:=SQLDisplayValue("1000.2500","NVARCHAR","Amount");got!="1\u00a0000,25" {
-        t.Fatalf("backward compatible Amount display: %s",got)
-    }
-    if got:=SQLDisplayValue("1000.2500","NVARCHAR","ContractName");got!="1000.2500" {
-        t.Fatalf("non-money text changed: %s",got)
+    // Even names implying monetary data must not cause N2 unless SQL
+    // actually returns type MONEY. SMALLMONEY is right aligned but not N2.
+    for _,typ:=range []string{"NVARCHAR","VARCHAR","DECIMAL","NUMERIC","SMALLMONEY","INT",""} {
+        for _,alias:=range []string{"Amount","Абон.плата","ContractName"} {
+            got:=SQLDisplayValue("1000.2500",typ,alias)
+            if got!="1000.2500" {
+                t.Errorf("untyped N2 conversion: %s %s => %q",typ,alias,got)
+            }
+        }
     }
 }
 

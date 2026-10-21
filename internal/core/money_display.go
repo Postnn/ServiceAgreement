@@ -78,20 +78,17 @@ func MoneyDisplayN2(value any) (string, bool) {
     return fmt.Sprintf("%s%s,%02d", prefix, digits, hundredths.Int64()), true
 }
 
-// SQLDisplayValue uses SQL Server's native metadata (MONEY, SMALLMONEY) to
-// format any money-typed result column. The old factory query casts Amount
-// into nvarchar, so Amount is also recognized for backward compatibility.
-// Only ListItem.Values are transformed; ListItem.Raw retains original values.
-func SQLDisplayValue(value any, dbType, alias string) string {
-    typ := strings.ToUpper(strings.TrimSpace(dbType))
-    if typ == "MONEY" || typ == "SMALLMONEY" || strings.EqualFold(alias, "Amount") {
+// SQLDisplayValue formats N2 ONLY for SQL Server MONEY columns.
+// Alias, display name, precision or textual values cannot trigger N2.
+// The original unrounded SQL value is retained separately in ListItem.Raw.
+func SQLDisplayValue(value any, dbType, _ string) string {
+    if isMoneySQLType(dbType) {
         if formatted, ok := MoneyDisplayN2(value); ok {
             return formatted
         }
     }
     return sqlText(value)
 }
-
 
 // ParseMoneyEditorText accepts Russian N2 input ("1 234,56", with nonbreaking
 // spaces) as well as SQL-style decimal input. The database still receives

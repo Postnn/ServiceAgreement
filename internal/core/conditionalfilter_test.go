@@ -52,8 +52,18 @@ func TestConditionalKindDetectionUsesSQLMetadataAndRaw(t *testing.T) {
     if got:=DetectFilterKind([]ListItem{{
         Raw:map[string]any{"X":big.NewRat(123,10)},
     }},"X");got!=FilterNumber {t.Fatalf("raw numeric fallback: %v",got)}
+    // SQL type always wins: aliases and numeric-looking text never turn
+    // NVARCHAR into a numeric filter.
     if got:=DetectFilterKind([]ListItem{{ColumnTypes:map[string]string{"Amount":"NVARCHAR"}}},"Amount");
-        got!=FilterNumber {t.Fatalf("legacy Amount alias must be numeric: %v",got)}
+        got!=FilterText {t.Fatalf("NVARCHAR should be text even for Amount alias: %v",got)}
+    if got:=DetectFilterKind([]ListItem{{ColumnTypes:map[string]string{"Amount":"MONEY"}}},"Amount");
+        got!=FilterNumber {t.Fatalf("SQL MONEY must be numeric: %v",got)}
+    for _,sqlType:=range []string{"SMALLMONEY","INT","BIGINT","REAL","FLOAT","DECIMAL","NUMERIC"} {
+        if got:=DetectFilterKind([]ListItem{{ColumnTypes:map[string]string{"Column":sqlType}}},"Column");
+            got!=FilterNumber {
+            t.Errorf("%s should yield numeric filter, got %s",sqlType,got)
+        }
+    }
 }
 
 func TestTextConditionsWithRussianAndMissingValues(t *testing.T) {

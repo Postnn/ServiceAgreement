@@ -39,10 +39,26 @@ func (c *fakeSQLConn) record(query string, args []driver.NamedValue) {
 func (c *fakeSQLConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	c.record(query, args)
 	switch {
-    case strings.Contains(query,"FROM (\nquery_money_list\n)"):
+    case strings.Contains(query,"FROM (\nquery_textmoney_list\n)"):
         return &fakeSQLRows{
             names:[]string{"ContractID","Абон.плата","SearchText"},
             types:[]string{"INT","NVARCHAR","NVARCHAR"},
+            rows:[][]driver.Value{
+                {int64(701),[]byte("2222.0000"),[]byte("701 Контракт")},
+            },
+        },nil
+    case strings.Contains(query,"FROM (\nquery_unconfigured_textmoney\n)"):
+        return &fakeSQLRows{
+            names:[]string{"ContractID","Абон.плата","SearchText"},
+            types:[]string{"INT","NVARCHAR","NVARCHAR"},
+            rows:[][]driver.Value{
+                {int64(801),[]byte("4520.4600"),[]byte("801 Договор")},
+            },
+        },nil
+    case strings.Contains(query,"FROM (\nquery_money_list\n)"):
+        return &fakeSQLRows{
+            names:[]string{"ContractID","Абон.плата","SearchText"},
+            types:[]string{"INT","MONEY","NVARCHAR"},
             rows:[][]driver.Value{
                 {int64(501),[]byte("2222.0000"),[]byte("501 Контракт")},
                 {int64(502),[]byte("1150.2400"),[]byte("502 Контракт")},
@@ -51,7 +67,7 @@ func (c *fakeSQLConn) QueryContext(_ context.Context, query string, args []drive
     case strings.Contains(query,"FROM (\nquery_unconfigured_money\n)"):
         return &fakeSQLRows{
             names:[]string{"ContractID","Абон.плата","SearchText"},
-            types:[]string{"INT","NVARCHAR","NVARCHAR"},
+            types:[]string{"INT","MONEY","NVARCHAR"},
             rows:[][]driver.Value{
                 {int64(601),[]byte("0.0000"),[]byte("601 Договор")},
                 {int64(602),[]byte("4520.4600"),[]byte("602 Договор")},
@@ -247,7 +263,7 @@ func TestUnconfiguredContractsUseConfiguredSQLAndDisplayEveryColumn(t *testing.T
 }
 
 
-func TestBothListsFormatAliasedMoneyCastAsNVARCHAR(t *testing.T) {
+func TestBothListsFormatSQLMoneyByType(t *testing.T) {
     state:=&fakeSQLState{}
     dbName:="serviceAgreementAliasedMoneyListTest"
     sql.Register(dbName,fakeSQLDriver{state:state})
@@ -270,7 +286,7 @@ func TestBothListsFormatAliasedMoneyCastAsNVARCHAR(t *testing.T) {
         t.Fatalf("money in list_sql not formatted N2: %+v",a)
     }
     if kind:=DetectFilterKind(a,"Абон.плата");kind!=FilterNumber {
-        t.Errorf("aliased money in list_sql appeared as %q filter",kind)
+        t.Errorf("SQL MONEY in list_sql must be numeric: %q",kind)
     }
     if raw:=sqlText(a[0].SQLValue("Абон.плата"));raw!="2222.0000" {
         t.Fatalf("original money precision lost: %q",raw)
@@ -282,10 +298,51 @@ func TestBothListsFormatAliasedMoneyCastAsNVARCHAR(t *testing.T) {
         t.Fatalf("money in without_parameters_sql not formatted N2: %+v",without)
     }
     if kind:=DetectFilterKind(without.Items,"Абон.плата");kind!=FilterNumber {
-        t.Errorf("aliased money in without_parameters_sql appeared as %q filter",kind)
+        t.Errorf("SQL MONEY in second list must be numeric: %q",kind)
     }
     unique:=ColumnValues(without.Items,"Абон.плата")
     if len(unique)!=2 || unique[0].Value!="0,00" || unique[1].Value!="4\u00a0520,46" {
         t.Fatalf("unique values popup does not use N2: %+v",unique)
+    }
+}
+
+
+// Text returned by SQL must remain text in both lists, no matter how the
+// alias is spelled or how numeric its content looks.
+func TestBothListsKeepCastMoneyNVARCHARAsText(t *testing.T) {
+    state:=&fakeSQLState{}
+    sql.Register("serviceAgreementCastedMoneyAsText",fakeSQLDriver{state:state})
+    db,err:=sql.Open("serviceAgreementCastedMoneyAsText","")
+    if err!=nil {t.Fatal(err)}
+    defer db.Close()
+    cfg:=DefaultConfig()
+    cfg.ListSQL="query_textmoney_list"
+    cfg.WithoutParametersSQL="query_unconfigured_textmoney"
+    cfg.ListColumns=[]ListColumn{
+        {Field:"ContractID",Title:"Код",Width:80,Order:1,SortField:"ContractID",Visible:false},
+        {Field:"Абон.плата",Title:"Абон.плата",Width:120,Order:2,SortField:"Абон.плата",Visible:true},
+        {Field:"SearchText",Title:"Поиск",Width:180,Order:3,SortField:"SearchText",Visible:false},
+    }
+    store:=Store{DB:db,Config:cfg}
+    rows,err:=store.List(context.Background(),"")
+    if err!=nil {t.Fatal(err)}
+    if len(rows)!=1 || rows[0].Field("Абон.плата")!="2222.0000" {
+        t.Fatalf("SQL NVARCHAR is NOT MONEY, unchanged text expected: %+v",rows)
+    }
+    p:=InferColumnPresentation(rows,"Абон.плата")
+    if p.Kind!=FilterText || p.Money {
+        t.Fatalf("SQL NVARCHAR must be left-aligned textual data: %+v",p)
+    }
+    without,err:=store.ListUnconfigured(context.Background(),"")
+    if err!=nil {t.Fatal(err)}
+    if len(without.Items)!=1 || without.Items[0].Field("Абон.плата")!="4520.4600" {
+        t.Fatalf("NVARCHAR in second list should remain unformatted: %+v",without)
+    }
+    if k:=DetectFilterKind(without.Items,"Абон.плата");k!=FilterText {
+        t.Fatalf("NVARCHAR second list should have a text filter, got %q",k)
+    }
+    values:=ColumnValues(without.Items,"Абон.плата")
+    if len(values)!=1 || values[0].Value!="4520.4600" {
+        t.Fatalf("NVARCHAR values in checkbox list must not be formatted: %+v",values)
     }
 }

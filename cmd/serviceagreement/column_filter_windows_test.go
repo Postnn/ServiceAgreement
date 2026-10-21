@@ -10,6 +10,7 @@ import (
     "github.com/Postnn/ServiceAgreement/internal/core"
     . "github.com/lxn/walk/declarative"
     "github.com/lxn/walk"
+    "github.com/lxn/walk"
 )
 
 func TestFilterValueModelChecksAndSearch(t *testing.T) {
@@ -460,44 +461,80 @@ func TestFilterPopupModeRepeatedSelectionNeverGrows(t *testing.T) {
 }
 
 
-func TestMoneyColumnAndUniqueValuesAreRightAligned(t *testing.T) {
-    // A user-defined SQL alias may have no type until the first query.
-    // Monetary columns should start right-aligned, then remain aligned by
-    // the numeric type inferred from SQL values.
-    configured:=[]core.ListColumn{
+func TestAllSQLNumericColumnsRightAlignedAndOnlyMoneyUsesN2(t *testing.T) {
+    columns:=tableColumns([]core.ListColumn{
         {Field:"Договор",Title:"Договор",Width:230,Order:1,SortField:"Договор",Visible:true},
         {Field:"Абон.плата",Title:"Абон.плата",Width:145,Order:2,SortField:"Абон.плата",Visible:true},
+    })
+    if len(columns)!=2 || columns[0].Alignment!=AlignNear || columns[1].Alignment!=AlignNear {
+        t.Fatalf("before SQL metadata arrives, never guess alignment from field name: %+v",columns)
     }
-    columns:=tableColumns(configured)
-    if len(columns)!=2 {
-        t.Fatalf("wrong column count: %+v",columns)
+    sqlTypes:=[]string{
+        "INT","BIGINT","SMALLINT","TINYINT","DECIMAL","NUMERIC",
+        "REAL","FLOAT","SMALLMONEY","MONEY","BIT",
     }
-    if columns[0].Alignment!=AlignNear || columns[1].Alignment!=AlignFar {
-        t.Fatalf("numeric money column should align right: %+v",columns)
+    for _,sqlType:=range sqlTypes {
+        row:=core.ListItem{
+            Values:map[string]string{"Абон.плата":"1150.2400"},
+            Raw:map[string]any{"Абон.плата":[]byte("1150.2400")},
+            ColumnTypes:map[string]string{"Абон.плата":sqlType},
+        }
+        rows:=[]core.ListItem{row}
+        if got:=columnAlignmentForRows(rows,"Абон.плата");got!=walk.AlignFar {
+            t.Errorf("SQL type %s must align right, got %v",sqlType,got)
+        }
+        if kind:=core.DetectFilterKind(rows,"Абон.плата");kind!=core.FilterNumber {
+            t.Errorf("SQL type %s should use numeric filters, got %s",sqlType,kind)
+        }
+        core.FormatListMoneyN2(rows)
+        expected:="1150.2400"
+        if sqlType=="MONEY" {expected="1\u00a0150,24"}
+        if got:=rows[0].Field("Абон.плата");got!=expected {
+            t.Errorf("SQL type %s: got %q, want %q (N2 only for MONEY)",sqlType,got,expected)
+        }
+        if got:=filterValueAlignment(core.FilterNumber);got!=AlignFar {
+            t.Errorf("%s unique numeric values must be right aligned, got %v",sqlType,got)
+        }
+    }
+
+    for _,sqlType:=range []string{"NVARCHAR","VARCHAR","CHAR"} {
+        rows:=[]core.ListItem{{
+            Values:map[string]string{"Абон.плата":"1150.2400"},
+            Raw:map[string]any{"Абон.плата":[]byte("1150.2400")},
+            ColumnTypes:map[string]string{"Абон.плата":sqlType},
+        }}
+        if got:=columnAlignmentForRows(rows,"Абон.плата");got!=walk.AlignNear {
+            t.Errorf("string type %s must align left, even for financial alias, got %v",sqlType,got)
+        }
+        if kind:=core.DetectFilterKind(rows,"Абон.плата");kind!=core.FilterText {
+            t.Errorf("string type %s should use text filters, got %s",sqlType,kind)
+        }
+        core.FormatListMoneyN2(rows)
+        if got:=rows[0].Field("Абон.плата");got!="1150.2400" {
+            t.Errorf("SQL %s value should remain text, got %q",sqlType,got)
+        }
     }
     for _,tc:=range []struct{kind core.FilterKind; want Alignment1D}{
         {core.FilterText,AlignNear},
         {core.FilterDate,AlignNear},
         {core.FilterNumber,AlignFar},
-    } {
-        if actual:=filterValueAlignment(tc.kind);actual!=tc.want {
-            t.Fatalf("unique-values alignment for %v = %v, expected %v",tc.kind,actual,tc.want)
+    }{
+        if got:=filterValueAlignment(tc.kind);got!=tc.want {
+            t.Errorf("unique values for %s: alignment %v want %v",tc.kind,got,tc.want)
         }
     }
-    rows:=[]core.ListItem{
-        {ID:1,Values:map[string]string{"Абон.плата":"0.0000"},
-            Raw:map[string]any{"Абон.плата":[]byte("0.0000")},
-            ColumnTypes:map[string]string{"Абон.плата":"NVARCHAR"}},
-        {ID:2,Values:map[string]string{"Абон.плата":"1150.2400"},
-            Raw:map[string]any{"Абон.плата":[]byte("1150.2400")},
-            ColumnTypes:map[string]string{"Абон.плата":"NVARCHAR"}},
+
+    money:=[]core.ListItem{
+        {ID:1,Values:map[string]string{"Сумма":"0.0000"},
+            Raw:map[string]any{"Сумма":[]byte("0.0000")},
+            ColumnTypes:map[string]string{"Сумма":"MONEY"}},
+        {ID:2,Values:map[string]string{"Сумма":"1150.2400"},
+            Raw:map[string]any{"Сумма":[]byte("1150.2400")},
+            ColumnTypes:map[string]string{"Сумма":"MONEY"}},
     }
-    if kind:=core.DetectFilterKind(rows,"Абон.плата");kind!=core.FilterNumber {
-        t.Fatalf("Russian alias must trigger numeric filter, got %q",kind)
-    }
-    core.FormatListMoneyN2(rows)
-    menu:=core.ColumnValues(rows,"Абон.плата")
-    if len(menu)!=2 || menu[0].Value!="0,00" || menu[1].Value!="1\u00a0150,24" {
-        t.Fatalf("filter checklist values are not formatted in N2: %v",menu)
+    core.FormatListMoneyN2(money)
+    choices:=core.ColumnValues(money,"Сумма")
+    if len(choices)!=2 || choices[0].Value!="0,00" || choices[1].Value!="1\u00a0150,24" {
+        t.Fatalf("money unique values must use N2 just like the main table: %+v",choices)
     }
 }

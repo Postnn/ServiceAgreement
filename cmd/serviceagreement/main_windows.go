@@ -49,32 +49,31 @@ func (m *tableModel) applyFilters() {
 func tableColumns(c []core.ListColumn) []TableViewColumn {
     result:=make([]TableViewColumn,0,len(c))
     for _,col:=range core.VisibleColumns(c) {
-        alignment:=AlignNear
-        // Before the first SQL read, monetary aliases can be recognized.
-        // After loading, all numeric columns are aligned from source values.
-        if core.InferColumnPresentation(nil,col.Field).Money {
-            alignment=AlignFar
-        }
         result=append(result,TableViewColumn{
             Name:col.Field,Title:filterHeaderTitle(col,false),
-            Width:col.Width,Alignment:alignment,
+            Width:col.Width,Alignment:AlignNear,
         })
     }
     return result
 }
 
-// Right-align SQL numeric columns (including money projected as NVARCHAR).
-// Re-evaluate after every query because custom SELECT aliases and source
-// types may change while list_columns still contains the same fields.
+// Alignment is derived from the actual SQL Server result type, not the
+// column name or formatted string. INT, FLOAT, DECIMAL, MONEY, etc. align
+// to the right; text-typed columns remain left aligned even when their
+// values look numeric or their alias is "Абон.плата".
+func columnAlignmentForRows(rows []core.ListItem,field string) walk.Alignment1D {
+    if core.InferColumnPresentation(rows,field).Kind==core.FilterNumber {
+        return walk.AlignFar
+    }
+    return walk.AlignNear
+}
+
 func applyTypedColumnAlignment(table *walk.TableView, model *tableModel) {
     if table==nil || model==nil {return}
     for i,col:=range model.columns {
         if i>=table.Columns().Len() {break}
-        alignment:=walk.AlignNear
-        if core.InferColumnPresentation(model.allItems,col.Field).Kind==core.FilterNumber {
-            alignment=walk.AlignFar
-        }
-        _=table.Columns().At(i).SetAlignment(alignment)
+        _=table.Columns().At(i).SetAlignment(
+            columnAlignmentForRows(model.allItems,col.Field))
     }
 }
 
@@ -278,9 +277,6 @@ func (a *application) applyColumns(cols []core.ListColumn) error {
 		c := walk.NewTableViewColumn()
 		c.SetName(col.Field)
 		_ = c.SetTitle(filterHeaderTitle(col,a.model.filters.Active(col.Field)))
-        if core.InferColumnPresentation(nil,col.Field).Money {
-            _=c.SetAlignment(walk.AlignFar)
-        }
 		_ = c.SetWidth(col.Width)
 		if err := a.table.Columns().Add(c); err != nil {
 			return err
@@ -462,9 +458,6 @@ func (a *application) applyUnconfiguredColumns(names []string) error {
 		c := walk.NewTableViewColumn()
 		c.SetName(col.Field)
 		_ = c.SetTitle(filterHeaderTitle(col,a.withoutModel.filters.Active(col.Field)))
-        if core.InferColumnPresentation(nil,col.Field).Money {
-            _=c.SetAlignment(walk.AlignFar)
-        }
 		_ = c.SetWidth(col.Width)
 		if err := a.withoutTable.Columns().Add(c); err != nil { return err }
 	}
