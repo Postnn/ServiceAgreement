@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "dates": [
+    {"name":"positive-zero-month", "start":"2026-01-07", "code":6, "date":"2026-02-06"},
+    {"name":"negative-zero-month", "start":"2026-01-07", "code":-6, "date":"2026-01-06"},
+    {"name":"same-day-inclusive", "start":"2026-01-07", "code":7, "date":"2026-01-07"},
+    {"name":"same-day-negative-exclusive", "start":"2026-01-07", "code":-7, "date":"2025-12-07"},
+    {"name":"three-months-day-before-boundary", "start":"2026-01-07", "code":306, "date":"2026-05-06"},
+    {"name":"three-months-day-after-boundary", "start":"2026-01-07", "code":320, "date":"2026-04-20"},
+    {"name":"four-months", "start":"2026-01-07", "code":420, "date":"2026-05-20"},
+    {"name":"previous-service-month", "start":"2026-01-07", "code":-120, "date":"2025-12-20"},
+    {"name":"previous-window-current-calendar-month", "start":"2026-01-07", "code":-106, "date":"2026-01-06"},
+    {"name":"leap-end", "start":"2024-02-01", "code":99, "date":"2024-02-29"},
+    {"name":"nonleap-end", "start":"2026-02-01", "code":99, "date":"2026-02-28"},
+    {"name":"skip-missing-29", "start":"2026-02-01", "code":29, "date":"2026-03-29"},
+    {"name":"skip-missing-30", "start":"2026-02-01", "code":30, "date":"2026-03-30"},
+    {"name":"skip-missing-31", "start":"2026-04-01", "code":31, "date":"2026-05-31"},
+    {"name":"clamped-month-boundary", "start":"2026-01-31", "code":199, "date":"2026-02-28"},
+    {"name":"negative-empty-window", "start":"2026-03-01", "code":-131, "error":true},
+    {"name":"year-boundary", "start":"2026-12-15", "code":120, "date":"2027-01-20"},
+    {"name":"previous-month-end", "start":"2026-01-07", "code":-99, "date":"2025-12-31"}
+  ],
+  "codes": [
+    {"code":6,"before":false,"months":0,"day":6},
+    {"code":-6,"before":true,"months":0,"day":6},
+    {"code":2147483599,"before":false,"months":21474835,"day":99},
+    {"code":-2147483599,"before":true,"months":21474835,"day":99},
+    {"code":0,"error":true}, {"code":100,"error":true},
+    {"code":132,"error":true}, {"code":198,"error":true},
+    {"code":2147483647,"error":true}, {"code":-2147483648,"error":true},
+    {"code":2147483648,"error":true}, {"code":-2147483649,"error":true}
+  ]
+}

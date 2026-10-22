@@ -3,15 +3,14 @@
 package main
 
 import (
-	"runtime"
-	"strings"
-	"testing"
+"runtime"
+"strings"
+"syscall"
+"testing"
+"unsafe"
 
-	"syscall"
-	"unsafe"
-
-	"github.com/Postnn/ServiceAgreement/internal/core"
-	"github.com/lxn/win"
+"github.com/Postnn/ServiceAgreement/internal/sqlquery"
+"github.com/lxn/win"
 )
 
 func TestSQLTextEditorLineEndingConversion(t *testing.T) {
@@ -46,7 +45,7 @@ func TestSQLTextEditorKeepsOriginalPastedLayout(t *testing.T) {
 		t.Fatalf("switch/save changed whitespace: got %q, want %q", got, want)
 	}
 	// A formatter is allowed to change this layout only when explicitly called.
-	formatted := core.FormatSQL(want)
+	formatted := sqlquery.FormatSQL(want)
 	if formatted == want {
 		t.Fatal("test requires deliberately unformatted SQL text")
 	}
@@ -69,7 +68,7 @@ func TestNativeTextEditRendersFormattedSQLOnMultipleLines(t *testing.T) {
 	}
 	defer win.DestroyWindow(hwnd)
 
-	query := core.FormatSQL("SELECT a, b FROM dbo.[ДокументыДанные] WHERE a = @id ORDER BY a DESC")
+	query := sqlquery.FormatSQL("SELECT a, b FROM dbo.[ДокументыДанные] WHERE a = @id ORDER BY a DESC")
 	value := syscall.StringToUTF16Ptr(sqlTextForEditor(query))
 	if win.SendMessage(hwnd, win.WM_SETTEXT, 0, uintptr(unsafe.Pointer(value))) == 0 {
 		t.Fatalf("WM_SETTEXT failed: %v", syscall.GetLastError())

@@ -11,20 +11,26 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Postnn/ServiceAgreement/internal/core"
-    "github.com/Postnn/ServiceAgreement/internal/appicon"
+	"github.com/Postnn/ServiceAgreement/internal/appicon"
+	"github.com/Postnn/ServiceAgreement/internal/config"
+	"github.com/Postnn/ServiceAgreement/internal/domain"
+	"github.com/Postnn/ServiceAgreement/internal/presentation"
+	"github.com/Postnn/ServiceAgreement/internal/readmodel"
+	"github.com/Postnn/ServiceAgreement/internal/service"
+	"github.com/Postnn/ServiceAgreement/internal/sqlserver"
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 	_ "github.com/microsoft/go-mssqldb"
 )
 
 type tableModel struct {
-    walk.TableModelBase
-    items    []core.ListItem // visible after filters
-    allItems []core.ListItem // all SQL rows fetched (up to list_limit)
-    columns  []core.ListColumn
-    filters  core.ColumnFilterState
-    conditions core.FilterConditionState
+	walk.TableModelBase
+	result     readmodel.ListResult
+	items      []readmodel.ListItem // visible after filters
+	allItems   []readmodel.ListItem // all SQL rows fetched (up to list_limit)
+	columns    []readmodel.ListColumn
+	filters    presentation.ColumnFilterState
+	conditions presentation.FilterConditionState
 }
 
 func (m *tableModel) RowCount() int { return len(m.items) }
@@ -34,70 +40,87 @@ func (m *tableModel) Value(row, col int) interface{} {
 	}
 	return m.items[row].Field(m.columns[col].Field)
 }
-func (m *tableModel) replace(rows []core.ListItem) {
-    m.allItems = rows
-    if m.filters == nil { m.filters = make(core.ColumnFilterState) }
-    if m.conditions == nil { m.conditions = make(core.FilterConditionState) }
-    m.applyFilters()
+func (m *tableModel) replace(rows []readmodel.ListItem) {
+	m.allItems = rows
+	if m.filters == nil {
+		m.filters = make(presentation.ColumnFilterState)
+	}
+	if m.conditions == nil {
+		m.conditions = make(presentation.FilterConditionState)
+	}
+	m.applyFilters()
 }
 func (m *tableModel) applyFilters() {
-    selected := m.filters.Apply(m.allItems)
-    m.items = m.conditions.Apply(selected)
-    m.PublishRowsReset()
+	selected := m.filters.Apply(m.allItems)
+	m.items = m.conditions.Apply(selected)
+	m.PublishRowsReset()
 }
 
-func tableColumns(c []core.ListColumn) []TableViewColumn {
-    result:=make([]TableViewColumn,0,len(c))
-    for _,col:=range core.VisibleColumns(c) {
-        result=append(result,TableViewColumn{
-            Name:col.Field,Title:filterHeaderTitle(col,false),
-            Width:col.Width,Alignment:AlignNear,
-        })
-    }
-    return result
+func tableColumns(c []readmodel.ListColumn) []TableViewColumn {
+	result := make([]TableViewColumn, 0, len(c))
+	for _, col := range readmodel.VisibleColumns(c) {
+		result = append(result, TableViewColumn{
+			Name: col.Field, Title: filterHeaderTitle(col, false),
+			Width: col.Width, Alignment: AlignNear,
+		})
+	}
+	return result
 }
 
 // Alignment is derived from the actual SQL Server result type, not the
 // column name or formatted string. INT, FLOAT, DECIMAL, MONEY, etc. align
 // to the right; text-typed columns remain left aligned even when their
 // values look numeric or their alias is "Абон.плата".
-func columnAlignmentForRows(rows []core.ListItem,field string) walk.Alignment1D {
-    if core.InferColumnPresentation(rows,field).Kind==core.FilterNumber {
-        return walk.AlignFar
-    }
-    return walk.AlignNear
+func columnAlignmentForRows(rows []readmodel.ListItem, field string) walk.Alignment1D {
+	if presentation.InferColumnPresentation(rows, field).Kind == presentation.FilterNumber {
+		return walk.AlignFar
+	}
+	return walk.AlignNear
 }
 
 func applyTypedColumnAlignment(table *walk.TableView, model *tableModel) {
-    if table==nil || model==nil {return}
-    for i,col:=range model.columns {
-        if i>=table.Columns().Len() {break}
-        _=table.Columns().At(i).SetAlignment(
-            columnAlignmentForRows(model.allItems,col.Field))
-    }
+	if table == nil || model == nil {
+		return
+	}
+	for i, col := range model.columns {
+		if i >= table.Columns().Len() {
+			break
+		}
+		_ = table.Columns().At(i).SetAlignment(
+			columnAlignmentForResult(model.result, col.Field))
+	}
 }
 
+func columnAlignmentForResult(result readmodel.ListResult, field string) walk.Alignment1D {
+	if presentation.ColumnPresentationFor(result, field).Kind == presentation.FilterNumber {
+		return walk.AlignFar
+	}
+	return walk.AlignNear
+}
+
+func (a *application) agreements() service.Agreements { return service.New(&a.store) }
+
 type application struct {
-	cfgPath        string
-	store          core.Store
-	win            *walk.MainWindow
-    appIcon        *walk.Icon
-	table          *walk.TableView
-	search         *walk.LineEdit
-	status         *walk.Label
-    filterDetails *walk.TextEdit
-	model          *tableModel
-	withoutTable   *walk.TableView
-	withoutSearch  *walk.LineEdit
-	withoutStatus  *walk.Label
-    withoutFilterDetails *walk.TextEdit
-	withoutModel   *tableModel
-	withoutSortField string
+	cfgPath               string
+	store                 sqlserver.Store
+	win                   *walk.MainWindow
+	appIcon               *walk.Icon
+	table                 *walk.TableView
+	search                *walk.LineEdit
+	status                *walk.Label
+	filterDetails         *walk.TextEdit
+	model                 *tableModel
+	withoutTable          *walk.TableView
+	withoutSearch         *walk.LineEdit
+	withoutStatus         *walk.Label
+	withoutFilterDetails  *walk.TextEdit
+	withoutModel          *tableModel
+	withoutSortField      string
 	withoutSortDescending bool
-    filterPopupQueued bool
-    filterPopupOpen bool
-	sortField      string
-	sortDescending bool
+	filterPopupQueued     bool
+	filterPopupOpen       bool
+	sortField             string
+	sortDescending        bool
 }
 
 func main() {
@@ -112,14 +135,16 @@ func run() error {
 		return err
 	}
 	path := filepath.Join(filepath.Dir(exe), "config.json")
-	cfg, loadErr := core.LoadConfig(path)
+	cfg, loadErr := config.LoadConfig(path)
 	if loadErr != nil {
-		cfg = core.DefaultConfig()
+		cfg = config.DefaultConfig()
 	}
-	app := &application{cfgPath: path, store: core.Store{Config: cfg}, model: &tableModel{columns: core.VisibleColumns(cfg.ListColumns)}, withoutModel: &tableModel{columns: core.UnconfiguredColumns([]string{"ContractID", "Договор"})}}
+	app := &application{cfgPath: path, store: sqlserver.Store{Config: cfg}, model: &tableModel{columns: readmodel.VisibleColumns(cfg.ListColumns)}, withoutModel: &tableModel{columns: presentation.UnconfiguredColumns([]string{"ContractID", "Договор"})}}
 	app.appIcon, err = walk.NewIconFromImage(appicon.Render(48))
-    if err != nil { return fmt.Errorf("создание иконки приложения: %w",err) }
-    defer app.appIcon.Dispose()
+	if err != nil {
+		return fmt.Errorf("создание иконки приложения: %w", err)
+	}
+	defer app.appIcon.Dispose()
 	gearIcon, err := makeSettingsGearBitmap()
 	if err != nil {
 		return fmt.Errorf("значок настроек: %w", err)
@@ -139,9 +164,9 @@ func run() error {
 					HSpacer{},
 					ImageView{
 						Name: "settingsGear", Image: gearIcon,
-						Mode: ImageViewModeIdeal,
-						MinSize: Size{Width: 20, Height: 20},
-						MaxSize: Size{Width: 20, Height: 20},
+						Mode:        ImageViewModeIdeal,
+						MinSize:     Size{Width: 20, Height: 20},
+						MaxSize:     Size{Width: 20, Height: 20},
 						ToolTipText: "Настройки SQL и колонок",
 						OnMouseUp: func(x, y int, button walk.MouseButton) {
 							if button == walk.LeftButton {
@@ -153,14 +178,16 @@ func run() error {
 			},
 			TabWidget{Pages: []TabPage{
 				{
-					Title: "Договоры с параметрами",
+					Title:  "Договоры с параметрами",
 					Layout: VBox{Margins: Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 8},
 					Children: []Widget{
 						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 							Label{Text: "Поиск по договору:"},
 							LineEdit{AssignTo: &app.search, CueBanner: "Код или название; Enter — искать",
 								OnKeyDown: func(key walk.Key) {
-									if key == walk.KeyReturn { app.refresh() }
+									if key == walk.KeyReturn {
+										app.refresh()
+									}
 								}},
 							PushButton{Text: "Найти", OnClicked: app.refresh},
 							PushButton{Text: "Обновить", OnClicked: app.refresh},
@@ -168,15 +195,15 @@ func run() error {
 						TableView{AssignTo: &app.table, Model: app.model, AlternatingRowBG: true,
 							MultiSelection: false, ColumnsOrderable: false, Columns: tableColumns(cfg.ListColumns),
 							OnItemActivated: app.editSelected},
-                        // Read-only multiline summary appears only when typed
-                        // conditions are active. It shows every column's
-                        // current filter and the AND/OR expression.
-                        TextEdit{
-                            AssignTo: &app.filterDetails,
-                            ReadOnly:true,Visible:false,VScroll:true,
-                            MinSize:Size{Height:52},MaxSize:Size{Height:80},
-                            Text:"",
-                        },
+						// Read-only multiline summary appears only when typed
+						// conditions are active. It shows every column's
+						// current filter and the AND/OR expression.
+						TextEdit{
+							AssignTo: &app.filterDetails,
+							ReadOnly: true, Visible: false, VScroll: true,
+							MinSize: Size{Height: 52}, MaxSize: Size{Height: 80},
+							Text: "",
+						},
 						Label{Text: "Нажмите ▾ в заголовке, чтобы сортировать или отфильтровать значения. Фильтрация — по загруженным строкам."},
 						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 							PushButton{Text: "Добавить", OnClicked: app.add},
@@ -187,28 +214,30 @@ func run() error {
 					},
 				},
 				{
-					Title: "Договоры без параметров",
+					Title:  "Договоры без параметров",
 					Layout: VBox{Margins: Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 8},
 					Children: []Widget{
 						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 							Label{Text: "Поиск по договору:"},
 							LineEdit{AssignTo: &app.withoutSearch, CueBanner: "Код или название; Enter — искать",
 								OnKeyDown: func(key walk.Key) {
-									if key == walk.KeyReturn { app.refreshWithout() }
+									if key == walk.KeyReturn {
+										app.refreshWithout()
+									}
 								}},
 							PushButton{Text: "Найти", OnClicked: app.refreshWithout},
 							PushButton{Text: "Обновить", OnClicked: app.refreshWithout},
 						}},
 						TableView{AssignTo: &app.withoutTable, Model: app.withoutModel,
 							AlternatingRowBG: true, MultiSelection: false, ColumnsOrderable: false,
-							Columns: tableColumns(app.withoutModel.columns),
+							Columns:         tableColumns(app.withoutModel.columns),
 							OnItemActivated: app.addFromWithout},
-                        TextEdit{
-                            AssignTo: &app.withoutFilterDetails,
-                            ReadOnly:true,Visible:false,VScroll:true,
-                            MinSize:Size{Height:52},MaxSize:Size{Height:80},
-                            Text:"",
-                        },
+						TextEdit{
+							AssignTo: &app.withoutFilterDetails,
+							ReadOnly: true, Visible: false, VScroll: true,
+							MinSize: Size{Height: 52}, MaxSize: Size{Height: 80},
+							Text: "",
+						},
 						Label{Text: "Нажмите ▾ в заголовке для фильтра. Двойной щелчок открывает добавление параметров."},
 						Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 							PushButton{Text: "Задать параметры", OnClicked: app.addFromWithout},
@@ -223,9 +252,9 @@ func run() error {
 		return fmt.Errorf("создание главного окна: %w", err)
 	}
 	app.table.SetColumnsOrderable(false)
-    app.withoutTable.SetColumnsOrderable(false)
-    app.table.ColumnClicked().Attach(func(i int){app.queueColumnFilter(i,false)})
-    app.withoutTable.ColumnClicked().Attach(func(i int){app.queueColumnFilter(i,true)})
+	app.withoutTable.SetColumnsOrderable(false)
+	app.table.ColumnClicked().Attach(func(i int) { app.queueColumnFilter(i, false) })
+	app.withoutTable.ColumnClicked().Attach(func(i int) { app.queueColumnFilter(i, true) })
 	if loadErr != nil {
 		app.status.SetText("Требуется настройка config.json — нажмите значок ⚙ справа вверху")
 	} else if err := app.connect(cfg); err != nil {
@@ -240,7 +269,7 @@ func run() error {
 	return nil
 }
 
-func (a *application) connect(cfg core.Config) error {
+func (a *application) connect(cfg config.Config) error {
 	db, err := sql.Open("sqlserver", cfg.ConnectionString)
 	if err != nil {
 		return err
@@ -248,9 +277,9 @@ func (a *application) connect(cfg core.Config) error {
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
 	ctx, cancel := cfg.QueryContext()
-    restore := beginSQLWait(a.win)
+	restore := beginSQLWait(a.win)
 	err = db.PingContext(ctx)
-    restore()
+	restore()
 	cancel()
 	if err != nil {
 		db.Close()
@@ -264,19 +293,19 @@ func (a *application) connect(cfg core.Config) error {
 	return nil
 }
 
-func (a *application) applyColumns(cols []core.ListColumn) error {
-    a.table.SetColumnsOrderable(false)
+func (a *application) applyColumns(cols []readmodel.ListColumn) error {
+	a.table.SetColumnsOrderable(false)
 	if err := a.table.Columns().Clear(); err != nil {
 		return err
 	}
-	a.model.columns = core.VisibleColumns(cols)
-    a.model.filters.KeepFields(a.model.columns)
-    a.model.conditions.KeepFields(a.model.columns)
+	a.model.columns = readmodel.VisibleColumns(cols)
+	a.model.filters.KeepFields(a.model.columns)
+	a.model.conditions.KeepFields(a.model.columns)
 	a.sortField, a.sortDescending = "", false
 	for _, col := range a.model.columns {
 		c := walk.NewTableViewColumn()
 		c.SetName(col.Field)
-		_ = c.SetTitle(filterHeaderTitle(col,a.model.filters.Active(col.Field)))
+		_ = c.SetTitle(filterHeaderTitle(col, a.model.filters.Active(col.Field)))
 		_ = c.SetWidth(col.Width)
 		if err := a.table.Columns().Add(c); err != nil {
 			return err
@@ -289,16 +318,16 @@ func (a *application) applyColumns(cols []core.ListColumn) error {
 // mergeColumnsFromSQL reconciles the stored appearance settings with both SQL
 // result sets. New SELECT aliases are visible by default. SQL fields which
 // were removed are discarded only after the user confirms the proposal.
-func reconcileColumnSettings(owner walk.Form, db *sql.DB, cfg *core.Config) (bool, bool, error) {
+func reconcileColumnSettings(owner walk.Form, db *sql.DB, cfg *config.Config) (bool, bool, error) {
 	ctx, cancel := cfg.QueryContext()
-    restore := beginSQLWait(owner)
-	names, err := core.QueryListSchema(ctx, db, *cfg)
-    restore()
+	restore := beginSQLWait(owner)
+	names, err := sqlserver.QueryListSchema(ctx, db, *cfg)
+	restore()
 	cancel()
 	if err != nil {
 		return false, false, err
 	}
-	result, err := core.ReconcileListColumns(cfg.ListColumns, names)
+	result, err := presentation.ReconcileListColumns(cfg.ListColumns, names)
 	if err != nil {
 		return false, false, err
 	}
@@ -330,7 +359,7 @@ func (a *application) synchronizeListColumns() bool {
 	if !changed {
 		return true
 	}
-	if err := core.SaveConfig(a.cfgPath, cfg); err != nil {
+	if err := config.SaveConfig(a.cfgPath, cfg); err != nil {
 		a.warn("Сохранение колонок", err)
 		return false
 	}
@@ -345,12 +374,13 @@ func (a *application) synchronizeListColumns() bool {
 func (a *application) warn(title string, err error) {
 	walk.MsgBox(a.win, title, err.Error(), walk.MsgBoxIconError)
 }
+
 // Manual refresh intentionally synchronizes SQL columns. This requires an
 // extra metadata query, which is useful after the operator edits list_sql or
 // the SELECT projection changes. Saving agreement parameters cannot change
 // the projection, so the write path calls refreshConfigured(false) instead.
 func (a *application) refresh() {
-    a.refreshConfigured(true)
+	a.refreshConfigured(true)
 }
 
 func (a *application) refreshConfigured(checkSchema bool) {
@@ -358,23 +388,30 @@ func (a *application) refreshConfigured(checkSchema bool) {
 		a.status.SetText("Нет подключения. Откройте настройки.")
 		return
 	}
-    if checkSchema && !a.synchronizeListColumns() {
-        return
-    }
+	if checkSchema && !a.synchronizeListColumns() {
+		return
+	}
 	ctx, cancel := a.store.Config.QueryContext()
 	defer cancel()
 	restore := beginSQLWait(a.win)
-    rows, err := a.store.List(ctx, a.search.Text())
-    restore()
+	result, err := a.agreements().List(ctx, a.search.Text())
+	restore()
 	if err != nil {
 		a.warn("Ошибка чтения списка", err)
 		return
 	}
-	core.SortListItems(rows, a.sortField, a.sortDescending)
-    a.model.replace(rows)
-    applyTypedColumnAlignment(a.table,a.model)
-    a.updateColumnFilterTitles(a.table,a.model)
-    a.updateFilteredStatus(false)
+	if _, err := sqlserver.ValidateResultColumns(result.ColumnNames(), a.store.Config.ListColumns); err != nil {
+		a.warn("Структура колонок списка", err)
+		return
+	}
+	result = presentation.PrepareList(result)
+	a.model.result = result
+	rows := result.Items
+	presentation.SortListItems(rows, a.sortField, a.sortDescending)
+	a.model.replace(rows)
+	applyTypedColumnAlignment(a.table, a.model)
+	a.updateColumnFilterTitles(a.table, a.model)
+	a.updateFilteredStatus(false)
 }
 func (a *application) selectedID() int {
 	if a.table == nil {
@@ -391,10 +428,8 @@ func (a *application) add() {
 		a.warn("Подключение", errors.New("сначала настройте подключение к SQL Server"))
 		return
 	}
-	r := core.Record{Period: 1, StartDay: 1, StartMonth: 1, DocumentsCode: 99, PaymentCode: 99, DisconnectCode: 99, Amount: "0.0000"}
-	if a.edit(r, false) {
-        a.refreshAfterMutation(parametersInserted)
-	}
+	r := domain.Record{Period: 1, StartDay: 1, StartMonth: 1, DocumentsCode: 99, PaymentCode: 99, DisconnectCode: 99, Amount: "0.0000"}
+	a.refreshAfterMutation(a.edit(r, false))
 }
 func (a *application) editSelected() {
 	id := a.selectedID()
@@ -404,16 +439,14 @@ func (a *application) editSelected() {
 	}
 	ctx, cancel := a.store.Config.QueryContext()
 	restore := beginSQLWait(a.win)
-    r, err := a.store.Get(ctx, id)
-    restore()
+	r, err := a.agreements().Get(ctx, id)
+	restore()
 	cancel()
 	if err != nil {
 		a.warn("Ошибка чтения записи", err)
 		return
 	}
-	if a.edit(r, true) {
-        a.refreshAfterMutation(parametersUpdated)
-	}
+	a.refreshAfterMutation(a.edit(r, true))
 }
 func (a *application) deleteSelected() {
 	id := a.selectedID()
@@ -427,41 +460,44 @@ func (a *application) deleteSelected() {
 	}
 	ctx, cancel := a.store.Config.QueryContext()
 	restore := beginSQLWait(a.win)
-    err := a.store.Delete(ctx, id)
-    restore()
+	mutation, err := a.agreements().Delete(ctx, id)
+	restore()
 	cancel()
 	if err != nil {
 		a.warn("Ошибка удаления", err)
 		return
 	}
-	a.refreshAfterMutation(parametersDeleted)
+	a.refreshAfterMutation(mutation)
 }
 
 // Mutation refreshes always reload the configured list exactly once, without
 // rerunning list_sql just for schema metadata. Editing an existing record
 // cannot affect which contracts are missing parameters, so the second list
 // must NOT be queried. Insert/delete do change the second list membership.
-type parameterMutation uint8
+type parameterMutation = service.Mutation
 
 const (
-    parametersUpdated parameterMutation = iota
-    parametersInserted
-    parametersDeleted
+	parametersUpdated  = service.Updated
+	parametersInserted = service.Inserted
+	parametersDeleted  = service.Deleted
 )
 
 func runMutationRefresh(
-    mutation parameterMutation,
-    refreshConfigured func(checkSchema bool),
-    refreshUnconfigured func(),
+	mutation parameterMutation,
+	refreshConfigured func(checkSchema bool),
+	refreshUnconfigured func(),
 ) {
-    refreshConfigured(false)
-    if mutation==parametersInserted || mutation==parametersDeleted {
-        refreshUnconfigured()
-    }
+	if mutation == service.None {
+		return
+	}
+	refreshConfigured(false)
+	if mutation == parametersInserted || mutation == parametersDeleted {
+		refreshUnconfigured()
+	}
 }
 
 func (a *application) refreshAfterMutation(mutation parameterMutation) {
-    runMutationRefresh(mutation,a.refreshConfigured,a.refreshWithout)
+	runMutationRefresh(mutation, a.refreshConfigured, a.refreshWithout)
 }
 
 // Explicit full refresh on startup and after changing application settings.
@@ -473,9 +509,9 @@ func (a *application) refreshBoth() {
 }
 
 func (a *application) applyUnconfiguredColumns(names []string) error {
-    a.withoutTable.SetColumnsOrderable(false)
-	cols := core.UnconfiguredColumns(names)
-    unchanged := len(a.withoutModel.columns) == len(cols)
+	a.withoutTable.SetColumnsOrderable(false)
+	cols := presentation.UnconfiguredColumns(names)
+	unchanged := len(a.withoutModel.columns) == len(cols)
 	if unchanged {
 		for i, col := range cols {
 			if !strings.EqualFold(a.withoutModel.columns[i].Field, col.Field) {
@@ -484,18 +520,24 @@ func (a *application) applyUnconfiguredColumns(names []string) error {
 			}
 		}
 	}
-	if unchanged { return nil }
-	if err := a.withoutTable.Columns().Clear(); err != nil { return err }
+	if unchanged {
+		return nil
+	}
+	if err := a.withoutTable.Columns().Clear(); err != nil {
+		return err
+	}
 	a.withoutModel.columns = cols
-    a.withoutModel.filters.KeepFields(cols)
-    a.withoutModel.conditions.KeepFields(cols)
+	a.withoutModel.filters.KeepFields(cols)
+	a.withoutModel.conditions.KeepFields(cols)
 	a.withoutSortField, a.withoutSortDescending = "", false
 	for _, col := range cols {
 		c := walk.NewTableViewColumn()
 		c.SetName(col.Field)
-		_ = c.SetTitle(filterHeaderTitle(col,a.withoutModel.filters.Active(col.Field)))
+		_ = c.SetTitle(filterHeaderTitle(col, a.withoutModel.filters.Active(col.Field)))
 		_ = c.SetWidth(col.Width)
-		if err := a.withoutTable.Columns().Add(c); err != nil { return err }
+		if err := a.withoutTable.Columns().Add(c); err != nil {
+			return err
+		}
 	}
 	a.withoutModel.replace(nil)
 	return nil
@@ -509,22 +551,24 @@ func (a *application) refreshWithout() {
 	ctx, cancel := a.store.Config.QueryContext()
 	defer cancel()
 	restore := beginSQLWait(a.win)
-    result, err := a.store.ListUnconfigured(ctx, a.withoutSearch.Text())
-    restore()
+	result, err := a.agreements().ListUnconfigured(ctx, a.withoutSearch.Text())
+	restore()
 	if err != nil {
 		a.warn("Договоры без параметров", err)
 		a.withoutStatus.SetText("Ошибка получения списка")
 		return
 	}
-	if err := a.applyUnconfiguredColumns(result.Columns); err != nil {
+	if err := a.applyUnconfiguredColumns(result.ColumnNames()); err != nil {
 		a.warn("Колонки договоров без параметров", err)
 		return
 	}
-	core.SortListItems(result.Items, a.withoutSortField, a.withoutSortDescending)
-    a.withoutModel.replace(result.Items)
-    applyTypedColumnAlignment(a.withoutTable,a.withoutModel)
-    a.updateColumnFilterTitles(a.withoutTable,a.withoutModel)
-    a.updateFilteredStatus(true)
+	result = presentation.PrepareList(result)
+	a.withoutModel.result = result
+	presentation.SortListItems(result.Items, a.withoutSortField, a.withoutSortDescending)
+	a.withoutModel.replace(result.Items)
+	applyTypedColumnAlignment(a.withoutTable, a.withoutModel)
+	a.updateColumnFilterTitles(a.withoutTable, a.withoutModel)
+	a.updateFilteredStatus(true)
 }
 
 func (a *application) addFromWithout() {
@@ -538,16 +582,16 @@ func (a *application) addFromWithout() {
 		return
 	}
 	id := a.withoutModel.items[idx].ID
-	r := core.Record{
+	r := domain.Record{
 		ContractID: id, Period: 1, StartDay: 1, StartMonth: 1,
 		DocumentsCode: 99, PaymentCode: 99, DisconnectCode: 99, Amount: "0.0000",
 	}
 	// Contract is preselected and locked for this specific agreement.
 	label := a.withoutModel.items[idx].Field("Договор")
-    if label == "" {
-        // Older custom queries may still return the previous alias.
-        label = a.withoutModel.items[idx].Field("ContractName")
-    }
+	if label == "" {
+		// Older custom queries may still return the previous alias.
+		label = a.withoutModel.items[idx].Field("ContractName")
+	}
 	if label == "" {
 		for _, col := range a.withoutModel.columns {
 			if !strings.EqualFold(col.Field, "ContractID") {
@@ -556,9 +600,7 @@ func (a *application) addFromWithout() {
 			}
 		}
 	}
-	if a.editWithContract(r, false, true, label) {
-        a.refreshAfterMutation(parametersInserted)
-    }
+	a.refreshAfterMutation(a.editWithContract(r, false, true, label))
 }
 
 func intText(n int) string { return strconv.Itoa(n) }
