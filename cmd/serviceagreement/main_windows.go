@@ -345,14 +345,22 @@ func (a *application) synchronizeListColumns() bool {
 func (a *application) warn(title string, err error) {
 	walk.MsgBox(a.win, title, err.Error(), walk.MsgBoxIconError)
 }
+// Manual refresh intentionally synchronizes SQL columns. This requires an
+// extra metadata query, which is useful after the operator edits list_sql or
+// the SELECT projection changes. Saving agreement parameters cannot change
+// the projection, so the write path calls refreshConfigured(false) instead.
 func (a *application) refresh() {
+    a.refreshConfigured(true)
+}
+
+func (a *application) refreshConfigured(checkSchema bool) {
 	if a.store.DB == nil {
 		a.status.SetText("Нет подключения. Откройте настройки.")
 		return
 	}
-	if !a.synchronizeListColumns() {
-		return
-	}
+    if checkSchema && !a.synchronizeListColumns() {
+        return
+    }
 	ctx, cancel := a.store.Config.QueryContext()
 	defer cancel()
 	restore := beginSQLWait(a.win)
@@ -385,7 +393,7 @@ func (a *application) add() {
 	}
 	r := core.Record{Period: 1, StartDay: 1, StartMonth: 1, DocumentsCode: 99, PaymentCode: 99, DisconnectCode: 99, Amount: "0.0000"}
 	if a.edit(r, false) {
-		a.refreshBoth()
+        a.refreshAfterMutation(parametersInserted)
 	}
 }
 func (a *application) editSelected() {
@@ -404,7 +412,7 @@ func (a *application) editSelected() {
 		return
 	}
 	if a.edit(r, true) {
-		a.refreshBoth()
+        a.refreshAfterMutation(parametersUpdated)
 	}
 }
 func (a *application) deleteSelected() {
@@ -426,11 +434,39 @@ func (a *application) deleteSelected() {
 		a.warn("Ошибка удаления", err)
 		return
 	}
-	a.refreshBoth()
+	a.refreshAfterMutation(parametersDeleted)
 }
 
-// Both lists are refreshed after every successful insert, update or delete.
-// Each retains its own search text, so filtered results remain predictable.
+// Mutation refreshes always reload the configured list exactly once, without
+// rerunning list_sql just for schema metadata. Editing an existing record
+// cannot affect which contracts are missing parameters, so the second list
+// must NOT be queried. Insert/delete do change the second list membership.
+type parameterMutation uint8
+
+const (
+    parametersUpdated parameterMutation = iota
+    parametersInserted
+    parametersDeleted
+)
+
+func runMutationRefresh(
+    mutation parameterMutation,
+    refreshConfigured func(checkSchema bool),
+    refreshUnconfigured func(),
+) {
+    refreshConfigured(false)
+    if mutation==parametersInserted || mutation==parametersDeleted {
+        refreshUnconfigured()
+    }
+}
+
+func (a *application) refreshAfterMutation(mutation parameterMutation) {
+    runMutationRefresh(mutation,a.refreshConfigured,a.refreshWithout)
+}
+
+// Explicit full refresh on startup and after changing application settings.
+// Manual refreshes retain SQL result-schema synchronization, including
+// detection of newly added/removed SELECT columns.
 func (a *application) refreshBoth() {
 	a.refresh()
 	a.refreshWithout()
@@ -520,7 +556,9 @@ func (a *application) addFromWithout() {
 			}
 		}
 	}
-	if a.editWithContract(r, false, true, label) { a.refreshBoth() }
+	if a.editWithContract(r, false, true, label) {
+        a.refreshAfterMutation(parametersInserted)
+    }
 }
 
 func intText(n int) string { return strconv.Itoa(n) }
