@@ -3,22 +3,22 @@
 package main
 
 import (
-	"fmt"
-	"strings"
+"fmt"
+"strings"
 
-	"github.com/Postnn/ServiceAgreement/internal/core"
-	"github.com/lxn/walk"
-	"github.com/lxn/win"
+"github.com/Postnn/ServiceAgreement/internal/domain"
+"github.com/lxn/walk"
+"github.com/lxn/win"
 )
 
-func optionLabels(options []core.Option) []string {
+func optionLabels(options []domain.Option) []string {
 	labels := make([]string, 0, len(options))
 	for _, o := range options {
 		labels = append(labels, fmt.Sprintf("%d — %s", o.ID, o.Label))
 	}
 	return labels
 }
-func optionIndex(options []core.Option, id int) int {
+func optionIndex(options []domain.Option, id int) int {
 	for i, o := range options {
 		if o.ID == id {
 			return i
@@ -26,9 +26,9 @@ func optionIndex(options []core.Option, id int) int {
 	}
 	return -1
 }
-func addMissing(options []core.Option, id int) []core.Option {
+func addMissing(options []domain.Option, id int) []domain.Option {
 	if id > 0 && optionIndex(options, id) < 0 {
-		return append(options, core.Option{ID: id, Label: "Текущее значение (не возвращено запросом)"})
+		return append(options, domain.Option{ID: id, Label: "Текущее значение (не возвращено запросом)"})
 	}
 	return options
 }
@@ -36,16 +36,16 @@ func addMissing(options []core.Option, id int) []core.Option {
 type lookupControl struct {
 	owner           *walk.MainWindow
 	box             *walk.ComboBox
-	options         []core.Option
+	options         []domain.Option
 	selected        int
 	busy            bool
 	label           string
 	lastSearch      string
 	lastResultCount int
-	query           func(search string, selected int) ([]core.Option, error)
+	query           func(search string, selected int) ([]domain.Option, error)
 }
 
-func (l *lookupControl) setOptions(options []core.Option, selectID int) error {
+func (l *lookupControl) setOptions(options []domain.Option, selectID int) error {
 	l.busy = true
 	defer func() { l.busy = false }()
 	l.options = options

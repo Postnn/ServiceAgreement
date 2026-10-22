@@ -3,13 +3,17 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"github.com/Postnn/ServiceAgreement/internal/core"
-	"github.com/lxn/walk"
-	. "github.com/lxn/walk/declarative"
 	"strings"
 	"time"
+
+	"github.com/Postnn/ServiceAgreement/internal/domain"
+	"github.com/Postnn/ServiceAgreement/internal/presentation"
+	"github.com/Postnn/ServiceAgreement/internal/service"
+	"github.com/lxn/walk"
+	. "github.com/lxn/walk/declarative"
 )
 
 func dayLabels() []string {
@@ -41,13 +45,13 @@ func chosenDay(idx int) (int, error) {
 }
 
 // edit displays the record-editing dialog.
-func (a *application) edit(original core.Record, existing bool) bool {
+func (a *application) edit(original domain.Record, existing bool) service.Mutation {
 	return a.editWithContract(original, existing, false, "")
 }
 
 // The second list fixes ContractID to the selected agreement while all other
 // service terms remain editable. No additional edit form is needed.
-func (a *application) editWithContract(original core.Record, existing bool, lockContract bool, contractLabel string) bool {
+func (a *application) editWithContract(original domain.Record, existing bool, lockContract bool, contractLabel string) service.Mutation {
 	var dlg *walk.Dialog
 	var amount, day *walk.LineEdit
 	var docMonths, payMonths, offMonths *walk.LineEdit
@@ -57,18 +61,18 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 	var contractBox, typeBox, periodBox, monthBox *walk.ComboBox
 	var autoBox, notifyBox *walk.CheckBox
 	var saveButton *walk.PushButton
-	lookup := func(sqlText, search string, selected int) ([]core.Option, error) {
+	lookup := func(query func(context.Context, string, int) ([]domain.Option, error), search string, selected int) ([]domain.Option, error) {
 		ctx, cancel := a.store.Config.QueryContext()
-        defer cancel()
-        restore := beginSQLWait(a.win)
-        options, err := a.store.Lookup(ctx, sqlText, search, selected)
-        restore()
-        return options, err
+		defer cancel()
+		restore := beginSQLWait(a.win)
+		options, err := query(ctx, search, selected)
+		restore()
+		return options, err
 	}
-	contractOptions, err := lookup(a.store.Config.ContractsSQL, "", original.ContractID)
+	contractOptions, err := lookup(a.agreements().Contracts, "", original.ContractID)
 	if err != nil {
 		a.warn("Ошибка выбора договора", err)
-		return false
+		return service.None
 	}
 	contractOptions = addMissing(contractOptions, original.ContractID)
 	if lockContract && strings.TrimSpace(contractLabel) != "" {
@@ -78,28 +82,28 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 			}
 		}
 	}
-	typeOptions, err := lookup(a.store.Config.DocumentTypesSQL, "", original.TypeID)
+	typeOptions, err := lookup(a.agreements().DocumentTypes, "", original.TypeID)
 	if err != nil {
 		a.warn("Ошибка выбора типа документа", err)
-		return false
+		return service.None
 	}
 	typeOptions = addMissing(typeOptions, original.TypeID)
 	contractChoice := &lookupControl{owner: a.win, label: "Договор", options: contractOptions, selected: original.ContractID,
-		query: func(q string, selected int) ([]core.Option, error) {
-			return lookup(a.store.Config.ContractsSQL, q, selected)
+		query: func(q string, selected int) ([]domain.Option, error) {
+			return lookup(a.agreements().Contracts, q, selected)
 		}}
 	typeChoice := &lookupControl{owner: a.win, label: "Тип документа основания автооплаты", options: typeOptions, selected: original.TypeID,
-		query: func(q string, selected int) ([]core.Option, error) {
-			return lookup(a.store.Config.DocumentTypesSQL, q, selected)
+		query: func(q string, selected int) ([]domain.Option, error) {
+			return lookup(a.agreements().DocumentTypes, q, selected)
 		}}
 	monthNames := []string{"01 — январь", "02 — февраль", "03 — март", "04 — апрель", "05 — май", "06 — июнь", "07 — июль", "08 — август", "09 — сентябрь", "10 — октябрь", "11 — ноябрь", "12 — декабрь"}
 	directionNames := []string{"От начала (включительно)", "До начала"}
-	docInitial, docError := core.ParseXDD(original.DocumentsCode)
-	payInitial, payError := core.ParseXDD(original.PaymentCode)
-	offInitial, offError := core.ParseXDD(original.DisconnectCode)
+	docInitial, docError := domain.ParseXDD(original.DocumentsCode)
+	payInitial, payError := domain.ParseXDD(original.PaymentCode)
+	offInitial, offError := domain.ParseXDD(original.DisconnectCode)
 	if docError != nil || payError != nil || offError != nil {
 		a.warn("Некорректные коды XDD", fmt.Errorf("в исходной записи есть неверный код: документы=%d, оплата=%d, отключение=%d", original.DocumentsCode, original.PaymentCode, original.DisconnectCode))
-		return false
+		return service.None
 	}
 	dirIndex := func(b bool) int {
 		if b {
@@ -111,7 +115,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 		if direction == nil || months == nil || dd == nil {
 			return 0, errors.New("форма не инициализирована")
 		}
-		m, err := core.ParseIntField(title+": количество месяцев", months.Text())
+		m, err := presentation.ParseIntField(title+": количество месяцев", months.Text())
 		if err != nil {
 			return 0, err
 		}
@@ -122,7 +126,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 		if direction.CurrentIndex() < 0 || direction.CurrentIndex() > 1 {
 			return 0, fmt.Errorf("%s: выберите направление", title)
 		}
-		code, err := (core.XDD{Before: direction.CurrentIndex() == 1, Months: m, Day: d}).Code()
+		code, err := (domain.XDD{Before: direction.CurrentIndex() == 1, Months: m, Day: d}).Code()
 		if err != nil {
 			return 0, fmt.Errorf("%s: %w", title, err)
 		}
@@ -135,7 +139,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 			docMonths == nil || payMonths == nil || offMonths == nil || docDD == nil || payDD == nil || offDD == nil {
 			return
 		}
-		d, dayErr := core.ParseIntField("День начала периода", day.Text())
+		d, dayErr := presentation.ParseIntField("День начала периода", day.Text())
 		mo := monthBox.CurrentIndex() + 1
 		year := time.Now().Year()
 		preview := func(label string, direction *walk.ComboBox, months *walk.LineEdit, dd *walk.ComboBox, target *walk.Label) {
@@ -144,26 +148,26 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 				target.SetText("Введите месяц/день: " + err.Error())
 				return
 			}
-			c, _ := core.ParseXDD(code)
+			c, _ := domain.ParseXDD(code)
 			if dayErr != nil || d < 1 || d > 31 || mo < 1 || mo > 12 {
 				target.SetText(fmt.Sprintf("Код БД: %d — %s; для примера даты задайте начало периода", code, c.Label()))
 				return
 			}
-			date := core.ExampleDate(code, d, mo, year)
+			date := domain.ExampleDate(code, d, mo, year)
 			target.SetText(fmt.Sprintf("Код БД: %d — %s; пример: %02d.%02d.%d → %s", code, c.Label(), d, mo, year, date))
 		}
 		preview("Документы", docDirection, docMonths, docDD, docHint)
 		preview("Оплата", payDirection, payMonths, payDD, payHint)
 		preview("Отключение", offDirection, offMonths, offDD, offHint)
 	}
-	displayedAmount, amountFormatOK := core.MoneyDisplayN2(original.Amount)
-    if !amountFormatOK {
-        displayedAmount = original.Amount
-    }
+	displayedAmount, amountFormatOK := presentation.MoneyDisplayN2(original.Amount)
+	if !amountFormatOK {
+		displayedAmount = original.Amount
+	}
 
-	var saved bool
+	var saved service.Mutation
 	onSave := func() {
-		readInt := func(label string, e *walk.LineEdit) (int, error) { return core.ParseIntField(label, e.Text()) }
+		readInt := func(label string, e *walk.LineEdit) (int, error) { return presentation.ParseIntField(label, e.Text()) }
 		d, err := readInt("День начала периода", day)
 		if err != nil {
 			a.warn("Некорректное значение", err)
@@ -184,17 +188,17 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 			a.warn("Некорректное значение", err)
 			return
 		}
-		period, err := core.ParseServicePeriod(periodBox.Text())
+		period, err := domain.ParseServicePeriod(periodBox.Text())
 		if err != nil {
 			a.warn("Некорректное значение", err)
 			return
 		}
-		storedAmount, err := core.MoneyValueFromEditor(amount.Text(), displayedAmount, original.Amount)
-        if err != nil {
-            a.warn("Сумма абонентской платы", err)
-            return
-        }
-        updated := core.Record{
+		storedAmount, err := presentation.MoneyValueFromEditor(amount.Text(), displayedAmount, original.Amount)
+		if err != nil {
+			a.warn("Сумма абонентской платы", err)
+			return
+		}
+		updated := domain.Record{
 			ContractID: contractChoice.value(),
 			TypeID:     typeChoice.value(), Period: period,
 			Amount: storedAmount, StartDay: d, StartMonth: monthBox.CurrentIndex() + 1,
@@ -219,21 +223,21 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 			return
 		}
 		saveButton.SetEnabled(false)
-        restore := beginSQLWait(dlg)
+		restore := beginSQLWait(dlg)
 		ctx, cancel := a.store.Config.QueryContext()
 		if existing {
-			err = a.store.Update(ctx, original, updated)
+			saved, err = a.agreements().Update(ctx, original, updated)
 		} else {
-			err = a.store.Insert(ctx, updated)
+			saved, err = a.agreements().Insert(ctx, updated)
 		}
 		cancel()
-        restore()
+		restore()
 		saveButton.SetEnabled(true)
 		if err != nil {
 			a.warn("Ошибка сохранения", err)
 			return
 		}
-		saved = true
+		// The service returns a mutation only after a successful write.
 		dlg.Accept()
 	}
 	title := "Добавление параметров договора"
@@ -272,7 +276,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 					},
 				},
 				Label{Text: "Период оказания услуги (1–255 месяцев):"},
-				ComboBox{AssignTo: &periodBox, Editable: true, Model: core.ServicePeriodChoices, Value: core.ServicePeriodLabel(original.Period)},
+				ComboBox{AssignTo: &periodBox, Editable: true, Model: domain.ServicePeriodChoices, Value: domain.ServicePeriodLabel(original.Period)},
 				Label{Text: "День начала периода (1–31):"},
 				LineEdit{AssignTo: &day, Text: intText(original.StartDay), OnTextChanged: func() { updateExamples() }},
 				Label{Text: "Месяц начала периода:"},
@@ -281,78 +285,78 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 				CheckBox{AssignTo: &autoBox, Text: "Создавать служебку автоматически", Checked: original.AutoPay == 1},
 				Label{Text: "Сумма абонентской платы:"},
 				LineEdit{AssignTo: &amount, Text: displayedAmount,
-                    ToolTipText: "Сумма в формате N2 (например, 1 234,56). Исходная точность SQL money сохраняется, если сумму не менять."},
+					ToolTipText: "Сумма в формате N2 (например, 1 234,56). Исходная точность SQL money сохраняется, если сумму не менять."},
 				Label{Text: "Оповещение куратора:"},
 				CheckBox{AssignTo: &notifyBox, Text: "Оповещать при отсутствии документов", Checked: original.Notify == 1},
 			}},
 			Label{Text: "Сроки относительно начала периода. Укажите направление, число полных месяцев и день. DD=99 — последний день месяца."},
 
-            GroupBox{
-                Title: "Получение документов",
-                Layout: VBox{Margins: Margins{Left: 10, Top: 10, Right: 10, Bottom: 6}, Spacing: 4},
-                Children: []Widget{
-                    Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
-                        Label{Text: "Направление:"},
-                        ComboBox{AssignTo: &docDirection, Model: directionNames,
-                            MinSize: Size{Width: 180}, MaxSize: Size{Width: 205},
-                            CurrentIndex: dirIndex(docInitial.Before), OnCurrentIndexChanged: func() { updateExamples() }},
-                        Label{Text: "Месяцев:"},
-                        LineEdit{AssignTo: &docMonths, Text: intText(docInitial.Months),
-                            MinSize: Size{Width: 76}, MaxSize: Size{Width: 76},
-                            OnTextChanged: func() { updateExamples() }},
-                        Label{Text: "День:"},
-                        ComboBox{AssignTo: &docDD, Model: dayLabels(),
-                            MinSize: Size{Width: 160}, MaxSize: Size{Width: 190},
-                            CurrentIndex: dayIndex(docInitial.Day), OnCurrentIndexChanged: func() { updateExamples() }},
-                        HSpacer{},
-                    }},
-                    Label{AssignTo: &docHint, Text: ""},
-                },
-            },
-            GroupBox{
-                Title: "Оплата по договору",
-                Layout: VBox{Margins: Margins{Left: 10, Top: 10, Right: 10, Bottom: 6}, Spacing: 4},
-                Children: []Widget{
-                    Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
-                        Label{Text: "Направление:"},
-                        ComboBox{AssignTo: &payDirection, Model: directionNames,
-                            MinSize: Size{Width: 180}, MaxSize: Size{Width: 205},
-                            CurrentIndex: dirIndex(payInitial.Before), OnCurrentIndexChanged: func() { updateExamples() }},
-                        Label{Text: "Месяцев:"},
-                        LineEdit{AssignTo: &payMonths, Text: intText(payInitial.Months),
-                            MinSize: Size{Width: 76}, MaxSize: Size{Width: 76},
-                            OnTextChanged: func() { updateExamples() }},
-                        Label{Text: "День:"},
-                        ComboBox{AssignTo: &payDD, Model: dayLabels(),
-                            MinSize: Size{Width: 160}, MaxSize: Size{Width: 190},
-                            CurrentIndex: dayIndex(payInitial.Day), OnCurrentIndexChanged: func() { updateExamples() }},
-                        HSpacer{},
-                    }},
-                    Label{AssignTo: &payHint, Text: ""},
-                },
-            },
-            GroupBox{
-                Title: "Отключение услуги",
-                Layout: VBox{Margins: Margins{Left: 10, Top: 10, Right: 10, Bottom: 6}, Spacing: 4},
-                Children: []Widget{
-                    Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
-                        Label{Text: "Направление:"},
-                        ComboBox{AssignTo: &offDirection, Model: directionNames,
-                            MinSize: Size{Width: 180}, MaxSize: Size{Width: 205},
-                            CurrentIndex: dirIndex(offInitial.Before), OnCurrentIndexChanged: func() { updateExamples() }},
-                        Label{Text: "Месяцев:"},
-                        LineEdit{AssignTo: &offMonths, Text: intText(offInitial.Months),
-                            MinSize: Size{Width: 76}, MaxSize: Size{Width: 76},
-                            OnTextChanged: func() { updateExamples() }},
-                        Label{Text: "День:"},
-                        ComboBox{AssignTo: &offDD, Model: dayLabels(),
-                            MinSize: Size{Width: 160}, MaxSize: Size{Width: 190},
-                            CurrentIndex: dayIndex(offInitial.Day), OnCurrentIndexChanged: func() { updateExamples() }},
-                        HSpacer{},
-                    }},
-                    Label{AssignTo: &offHint, Text: ""},
-                },
-            },
+			GroupBox{
+				Title:  "Получение документов",
+				Layout: VBox{Margins: Margins{Left: 10, Top: 10, Right: 10, Bottom: 6}, Spacing: 4},
+				Children: []Widget{
+					Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
+						Label{Text: "Направление:"},
+						ComboBox{AssignTo: &docDirection, Model: directionNames,
+							MinSize: Size{Width: 180}, MaxSize: Size{Width: 205},
+							CurrentIndex: dirIndex(docInitial.Before), OnCurrentIndexChanged: func() { updateExamples() }},
+						Label{Text: "Месяцев:"},
+						LineEdit{AssignTo: &docMonths, Text: intText(docInitial.Months),
+							MinSize: Size{Width: 76}, MaxSize: Size{Width: 76},
+							OnTextChanged: func() { updateExamples() }},
+						Label{Text: "День:"},
+						ComboBox{AssignTo: &docDD, Model: dayLabels(),
+							MinSize: Size{Width: 160}, MaxSize: Size{Width: 190},
+							CurrentIndex: dayIndex(docInitial.Day), OnCurrentIndexChanged: func() { updateExamples() }},
+						HSpacer{},
+					}},
+					Label{AssignTo: &docHint, Text: ""},
+				},
+			},
+			GroupBox{
+				Title:  "Оплата по договору",
+				Layout: VBox{Margins: Margins{Left: 10, Top: 10, Right: 10, Bottom: 6}, Spacing: 4},
+				Children: []Widget{
+					Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
+						Label{Text: "Направление:"},
+						ComboBox{AssignTo: &payDirection, Model: directionNames,
+							MinSize: Size{Width: 180}, MaxSize: Size{Width: 205},
+							CurrentIndex: dirIndex(payInitial.Before), OnCurrentIndexChanged: func() { updateExamples() }},
+						Label{Text: "Месяцев:"},
+						LineEdit{AssignTo: &payMonths, Text: intText(payInitial.Months),
+							MinSize: Size{Width: 76}, MaxSize: Size{Width: 76},
+							OnTextChanged: func() { updateExamples() }},
+						Label{Text: "День:"},
+						ComboBox{AssignTo: &payDD, Model: dayLabels(),
+							MinSize: Size{Width: 160}, MaxSize: Size{Width: 190},
+							CurrentIndex: dayIndex(payInitial.Day), OnCurrentIndexChanged: func() { updateExamples() }},
+						HSpacer{},
+					}},
+					Label{AssignTo: &payHint, Text: ""},
+				},
+			},
+			GroupBox{
+				Title:  "Отключение услуги",
+				Layout: VBox{Margins: Margins{Left: 10, Top: 10, Right: 10, Bottom: 6}, Spacing: 4},
+				Children: []Widget{
+					Composite{Layout: HBox{MarginsZero: true, Spacing: 7}, Children: []Widget{
+						Label{Text: "Направление:"},
+						ComboBox{AssignTo: &offDirection, Model: directionNames,
+							MinSize: Size{Width: 180}, MaxSize: Size{Width: 205},
+							CurrentIndex: dirIndex(offInitial.Before), OnCurrentIndexChanged: func() { updateExamples() }},
+						Label{Text: "Месяцев:"},
+						LineEdit{AssignTo: &offMonths, Text: intText(offInitial.Months),
+							MinSize: Size{Width: 76}, MaxSize: Size{Width: 76},
+							OnTextChanged: func() { updateExamples() }},
+						Label{Text: "День:"},
+						ComboBox{AssignTo: &offDD, Model: dayLabels(),
+							MinSize: Size{Width: 160}, MaxSize: Size{Width: 190},
+							CurrentIndex: dayIndex(offInitial.Day), OnCurrentIndexChanged: func() { updateExamples() }},
+						HSpacer{},
+					}},
+					Label{AssignTo: &offHint, Text: ""},
+				},
+			},
 			Label{Text: "Даты приведены для примера с началом периода в текущем году; в БД записывается только код XDD."},
 			Composite{Layout: HBox{Spacing: 10}, Children: []Widget{
 				HSpacer{},
@@ -363,7 +367,7 @@ func (a *application) editWithContract(original core.Record, existing bool, lock
 	}.Create(a.win)
 	if err != nil {
 		a.warn("Ошибка открытия формы", err)
-		return false
+		return service.None
 	}
 	contractChoice.box = contractBox
 	typeChoice.box = typeBox

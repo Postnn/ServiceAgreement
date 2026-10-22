@@ -1,0 +1,32 @@
+{
+  "version":1,
+  "normalize":[
+    {"input":"0","value":"0.0000"},
+    {"input":" 0012,003 ","value":"12.0030"},
+    {"input":"922337203685477.5807","value":"922337203685477.5807"},
+    {"input":"-922337203685477.5808","value":"-922337203685477.5808"},
+    {"input":"922337203685477.5808","error":true},
+    {"input":"-922337203685477.5809","error":true},
+    {"input":"0.00001","error":true}, {"input":"1e2","error":true},
+    {"input":"1 000","error":true}, {"input":"","error":true}
+  ],
+  "display":[
+    {"type":"MONEY","input":"1234.5650","text":"1\u00a0234,56","kind":"number","money":true},
+    {"type":"MONEY","input":"1234.5750","text":"1\u00a0234,58","kind":"number","money":true},
+    {"type":"MONEY","input":"-1.0050","text":"-1,00","kind":"number","money":true},
+    {"type":"MONEY","input":"-0.0049","text":"0,00","kind":"number","money":true},
+    {"type":"MONEY","input":"922337203685477.5807","text":"922\u00a0337\u00a0203\u00a0685\u00a0477,58","kind":"number","money":true},
+    {"type":"NVARCHAR","input":"1234.5650","text":"1234.5650","kind":"text"},
+    {"type":"DECIMAL","input":"1234.5650","text":"1234.5650","kind":"number"},
+    {"type":"SMALLMONEY","input":"12.3400","text":"12.3400","kind":"number"},
+    {"type":"INT","input":"1234","text":"1234","kind":"number"},
+    {"type":"FLOAT","input":"12.5","text":"12.5","kind":"number"},
+    {"type":"MONEY","input":null,"text":"","kind":"number","money":true}
+  ],
+  "editor":[
+    {"input":"1\u00a0234,57","displayed":"1\u00a0234,57","original":"1234.5678","value":"1234.5678"},
+    {"input":"1 234,58","displayed":"1\u00a0234,57","original":"1234.5678","value":"1234.5800"},
+    {"input":"-0,01","displayed":"0,00","original":"0.0000","value":"-0.0100"},
+    {"input":"bad","displayed":"0,00","original":"0.0000","error":true}
+  ]
+}
